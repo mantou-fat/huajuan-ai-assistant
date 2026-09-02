@@ -5,6 +5,7 @@ import time
 import hashlib
 import queue      
 import threading 
+from concurrent.futures import ThreadPoolExecutor  # 第3课：多手下并行干活靠它
 import requests
 from openai import OpenAI
 import numpy as np
@@ -357,6 +358,21 @@ TOOLS = [
         }
     }
 },
+{
+    "type": "function",
+    "function": {
+        "name": "dispatch_agent",
+        "description": "从手下的子AI名册里挑一个干活：翻译找翻译官、写文案找文案师、整理长资料找资料员、写代码找代码员。判定规则：①用户明确说「派手下/找XX/让XX干/派个AI」时必须调用本工具，先调用再说话，不许只口头说'已派/派去啦'；②用户贴了大段文字要翻译/总结/整理时也应派出去；③随手的小翻译、两句话的文案直接自己干，不用派。用户一次要多个手下干活（如'同时派翻译官和文案师'）时，本回合可以连续发出多个 dispatch_agent 调用，一个手下一次调用。调用时把任务写成完整任务单交给它，等结果回来必须把每个手下给的结果内容完整转述（译文念译文、要点列要点、文案贴文案），不许只点评不转述、不许漏贴",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "agent": {"type": "string", "enum": ["翻译官", "文案师", "资料员", "代码员"], "description": "从名册里挑谁干"},
+                "task": {"type": "string", "description": "交给子AI的完整任务描述，要说清要求"}
+            },
+            "required": ["agent", "task"]
+        }
+    }
+},
 
 ]
 
@@ -454,6 +470,95 @@ def web_search(query):
         return "\n\n".join(parts)
     except Exception as e:
         return "搜索失败：" + str(e)
+# 第18个工具：子AI名册（给手下上编制）。每个成员的"专长"= 它的 system 人设
+AGENTS = {
+    "翻译官": "你是翻译官，负责一切语言转换。收到任务直接给译文，保留原意和语气，不要解释过程。",
+    "文案师": "你是文案师，负责写各种文案。写出的东西要有网感、抓人眼球，但别浮夸油腻。直接给成品。",
+    "资料员": "你是资料员，负责把长资料整理清楚。输出结构清晰的要点或摘要，直接给结果。",
+    "代码员": "你是代码员，负责写代码。直接给能跑的完整代码，需要时配一句简短说明，不要客套。",
+}
+
+def dispatch_agent(agent, task):
+    """第18个工具：从名册挑一个子AI干活。子AI不带人设、不带记忆、只带一张任务单"""
+    if agent not in AGENTS:
+        return f"名册里没有「{agent}」，现在登记的有：{'、'.join(AGENTS.keys())}"
+    resp = client.chat.completions.create(
+        model="qwen-plus",
+        messages=[
+            {"role": "system", "content": AGENTS[agent]},
+            {"role": "user", "content": str(task)},
+        ],
+        temperature=0.7,
+        max_tokens=2000,
+    )
+    return resp.choices[0].message.content.strip() or "子AI没给出结果"
+
+# ============ 第4课 map-reduce：大任务拆给手下分头干 ============
+def split_long_text(text, max_len):
+    """把长文切成每块不超过 max_len 字的列表。切法：先按换行断段，段内再按句末标点断句，
+    句子比 max_len 还长就硬切——保证每块都是完整的语义单元，资料员才读得懂"""
+    units = []                          # 第一步：磨成最小单元（句子）
+    for para in text.split("\n"):
+        para = para.strip()
+        if not para:
+            continue
+        units.extend(re.split(r'(?<=[。！？!?])', para))
+    blocks, cur = [], ""                # 第二步：句子攒成块，够一斗就封斗
+    for u in units:
+        u = u.strip()
+        if not u:
+            continue
+        if len(u) > max_len:            # 碰到超长句，硬切
+            if cur:
+                blocks.append(cur)
+                cur = ""
+            for i in range(0, len(u), max_len):
+                blocks.append(u[i:i + max_len])
+        elif len(cur) + len(u) <= max_len:
+            cur += u
+        else:
+            blocks.append(cur)
+            cur = u
+    if cur:
+        blocks.append(cur)
+    return blocks
+
+def map_phase(blocks):
+    """map（拆分干活阶段）：每块派一个资料员并行提炼要点，谁都不等谁"""
+    def work(i, block):
+        resp = client.chat.completions.create(
+            model="qwen-plus",
+            messages=[
+                {"role": "system", "content": AGENTS["资料员"]},
+                {"role": "user", "content": "请提取下面这段文本的要点，只输出要点本身，不要复述原文：\n" + block},
+            ],
+            temperature=0.3,            # 总结类活温度要低，稳字当头
+            max_tokens=1500,
+        )
+        return f"【第{i + 1}块】" + (resp.choices[0].message.content or "").strip()
+    with ThreadPoolExecutor(max_workers=4) as pool:   # 线程池是第3课的地基，直接复用
+        results = list(pool.map(work, range(len(blocks)), blocks))
+    return "\n".join(r for r in results if r)
+
+def auto_map_reduce(text):
+    """第4课入口：长文(≥3000字)+总结意图 且 没点名派手下 → 拆块并行总结，返回注入素材；否则返回空串。
+    reduce（合并阶段）交给主模型：它拿到各块摘要，去重整理成对用户的最终回答——老板干合并，手下干拆活。
+    阈值 3000 是实测校准：qwen-plus 单次啃 1600 字也能 6/6 全覆盖（拆了白拆还烧钱），
+    真到 3000+ 字注意力才开始衰减，那时候拆才划算"""
+    if len(text) < 3000:
+        return ""
+    if not any(kw in text for kw in ("总结", "整理", "概括", "要点", "摘要", "归纳", "提炼")):
+        return ""
+    if re.search(r'(派|找|叫|请|让)(翻译官|文案师|资料员|代码员|个AI|手下)', text):
+        return ""                       # 点名派手下走 dispatch_agent，两套机制不抢活
+    blocks = split_long_text(text, 800)
+    if len(blocks) < 2:
+        return ""
+    digest = map_phase(blocks)
+    return ("\n\n【长文分块总结】原文太长，已拆成%d块让资料员们并行整理，各块摘要如下：\n%s\n"
+            "（请基于以上分块摘要回答用户的问题：把重复的要点合并，按用户要求的格式输出最终答案，别逐字啃原文）"
+            % (len(blocks), digest))
+
 def generate_song(theme):
     """花卷点歌：自己写词，Fun-Music 谱曲演唱，下载到本地返回播放地址"""
     try:
@@ -651,7 +756,7 @@ def create_stream(messages, tools=TOOLS,on_text=None):
         model="qwen-plus",
         messages=messages,
         temperature=0.8,
-        max_tokens=1000,
+        max_tokens=4000,
         top_p=0.9,
         tools=tools,
         stream=True
@@ -1165,6 +1270,9 @@ TOOL_FUNCS = {
     "take_screenshot": take_screenshot,
     "lock_screen": lock_screen,
     "search_knowledge": search_knowledge,
+    "dispatch_agent": dispatch_agent,
+
+
 }
 # ===== 知识题硬性判断：规则引擎（关键词匹配，确定性，不会看走眼）=====
 KNOWLEDGE_KEYWORDS = ["什么是", "是什么", "怎么用", "如何", "原理", "区别", "对比",
@@ -1189,6 +1297,12 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None):
             kb = top_k_search(user_msg, k=2)
             if kb:
                 user_msg += "\n\n【知识库资料】\n" + "\n".join(kb) + "\n（以上是知识库检索到的内容，请基于它回答；如与问题无关可忽略）"
+        # 第4课 map-reduce 兜底：超长文本+总结意图 → 自动拆块并行派资料员，把各块摘要注入给主模型合并。
+        # 同款思路：模型没有"硬啃长文"的选项——它拿到的已经是手下们嚼碎喂好的料
+        mr_note = auto_map_reduce(user_msg)
+        map_reduce_triggered = bool(mr_note)   # 新增：记录本轮是否走了 map-reduce
+        if mr_note:
+            user_msg += mr_note
 
     messages.append({"role": "user", "content": user_msg})
 
@@ -1199,9 +1313,22 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None):
 
     non_system = [m for m in messages if m["role"] != "system"]
                 # RAG 记忆召回：每轮按当前问题现场检索，只带相关的，用完即扔不进 history
-    recalled = retrieve_memory(user_input, k=3, threshold=0.55)
+    # 包 try：召回失败（比如接口欠费/超时）只损失记忆，不拖垮整轮聊天
+    try:
+        recalled = retrieve_memory(user_input, k=3, threshold=0.55)
+    except Exception as e:
+        print("记忆召回失败（跳过，不影响聊天）：", e)
+        recalled = []
     if recalled:
             system_msg = system_msg + [{"role": "system", "content": "跟当前问题相关的记忆：\n" + "\n".join(recalled)}]
+    # 点名派手下兜底：命中"派翻译官/找文案师/派个AI"等说法就注入本轮回合强指令。
+    # 放 system 消息（模型对 system 的遵循优先级高于 user 正文里夹带），且只在本轮生效不污染 history
+    # map-reduce 兜底：模型嘴硬/格式跑偏时，用 system 强制拉回来
+    if map_reduce_triggered:
+        system_msg = system_msg + [{"role": "system", "content": "【本轮回合强制指令】文章已触发 map-reduce：资料员已将长文分块并返回【第N块】摘要。你的任务：①将上述分块摘要整理成结构化的要点列表（用序号 1. 2. 3. 或 - 项目符号输出），禁止写成读后感或情绪回应；②若用户询问处理方式，必须如实回答'文章较长，我切成了N块让资料员分头总结，再合并给你'；③禁止编造'自己一页页读''没分块''没派手下'等说法。"}]
+
+    if re.search(r'(派|找|叫|请|让)(翻译官|文案师|资料员|代码员|个AI|手下)', user_input):
+        system_msg = system_msg + [{"role": "system", "content": "【本轮回合强制指令】馒头点名要派手下：你必须调用 dispatch_agent 工具，从名册里挑对的人（翻译官/文案师/资料员/代码员）。一次派多个手下时，必须为每个手下各发一次 dispatch_agent 调用，一个都不许漏。等所有子AI结果都回来后，按顺序逐条贴出每个结果的内容本体（译文念译文、文案贴文案、要点逐条列），每条前加【翻译官】【文案师】这类标签；有几个结果就贴几条，禁止漏贴、禁止只点评不转述、禁止说'都转给你了/收着啦'却没贴内容。禁止自己代劳翻译/写作/总结。"}]
         
     messages_to_send = system_msg + non_system[-MAX_MESSAGES:]
 
@@ -1213,15 +1340,21 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None):
             steps = 0
             while result["finish_reason"] == "tool_calls" and steps < 5:
                 steps += 1
-                msg = {"role": "assistant", "content": result["content"], "tool_calls": result["tool_calls"]}
+                msg = {"role": "assistant", "content": "", "tool_calls": result["tool_calls"]}  # content 传空：防止模型把第一轮过渡话当成已回复，第二轮不转述工具结果
                 messages.append(msg)
-                for tc in result["tool_calls"]:                   
+                # 第3课：多手下并行开工——原来 for 串行（翻译官干等文案师），
+                # 现在线程池同时跑，谁都不等谁。on_tool 是 queue.Queue（线程安全）；
+                # dispatch_agent 调子AI是网络IO，天然适合并行；pool.map 保持结果顺序，tool 消息不乱
+                def run_one(tc):
+                    if on_tool:
+                        on_tool(tc["function"]["name"], json.loads(tc["function"]["arguments"]))
                     fn = TOOL_FUNCS[tc["function"]["name"]]
                     args = json.loads(tc["function"]["arguments"])
-                    if on_tool:
-                        on_tool(tc["function"]["name"], args)
-                    tool_result = fn(**args)
-                    messages.append({"role": "tool", "tool_call_id": tc["id"], "content": str(tool_result)})
+                    return tc["id"], str(fn(**args))
+                with ThreadPoolExecutor(max_workers=4) as pool:
+                    executed = list(pool.map(run_one, result["tool_calls"]))
+                for tc_id, content in executed:
+                    messages.append({"role": "tool", "tool_call_id": tc_id, "content": content})
                 result = create_stream(messages, on_text=on_text)
             full_reply = result["content"]or "工具调太多次了，我先刹住了，换个说法再问我一次？"
 
@@ -1291,11 +1424,13 @@ if __name__ == "__main__":
             print("已添加到知识库！")
             continue
         get_reply(user_input, print_stream=True)
+
 def tts(text, filename="tts_latest.wav"):
-    """文字转语音：调阿里 qwen-tts，把声音存到 static/ 文件夹，返回网页访问路径"""
+    """文字转语音：长文本自动切成小段分别合成，再拼接成一个 wav"""
     import urllib.request
     import urllib.error
     import json as _json
+    import wave
 
     # 缓存：用文字的 MD5 当文件名，同一段文字只合成一次
     filename = hashlib.md5(text.encode("utf-8")).hexdigest()[:16] + ".wav"
@@ -1303,29 +1438,89 @@ def tts(text, filename="tts_latest.wav"):
     if os.path.exists(save_path):
         return "/static/" + filename   # 已有现成音频，秒回
 
-    url = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
-    
+    # ---------- 第1步：切段 ----------
+    # 思路和第4课 split_long_text 一样：优先按句子切，切不出就攒
+    def split_sentences(long_text, max_len=300):
+        parts = []                     # 切好的段都放这里
+        current = ""                   # 正在攒的当前段
+        for ch in long_text:
+            current += ch
+            # 碰到句末标点，且当前段已经攒够 100 字，就封一段
+            # （"攒够100字"是防止全是短句时切得太碎，一段只有一句话）
+            if ch in "。！？?!\n" and len(current) >= 100:
+                parts.append(current)
+                current = ""
+        if current.strip():            # 最后剩下的尾巴不够 100 字也要
+            parts.append(current)
+        # 保险：极端情况一整段没有任何标点，按 max_len 硬切
+        final = []
+        for p in parts:
+            while len(p) > max_len:
+                final.append(p[:max_len])
+                p = p[max_len:]
+            if p.strip():
+                final.append(p)
+        return final
 
-    headers = {
-        "Authorization": "Bearer " + api_key,
-        "Content-Type": "application/json",
-    }
-    body = {
-        "model": "qwen-tts",
-        "input": {"text": text},
-        "voice": "longxiaochun_v2",
-        "parameters": {"format": "wav", "sample_rate": 32000},
-    }
-    req = urllib.request.Request(url, data=_json.dumps(body).encode("utf-8"), headers=headers)
-    with urllib.request.urlopen(req, timeout=60) as r:
-        resp = _json.load(r)
+    # ---------- 第2步：单段合成（就是原来 tts 的主体，text 换成 piece） ----------
+    def synth_one(piece, i):
+        url = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
+        headers = {
+            "Authorization": "Bearer " + api_key,
+            "Content-Type": "application/json",
+        }
+        body = {
+            "model": "qwen-tts",
+            "input": {"text": piece},
+            "voice": "longxiaochun_v2",
+            "parameters": {"format": "wav", "sample_rate": 32000},
+        }
+        req = urllib.request.Request(url, data=_json.dumps(body).encode("utf-8"), headers=headers)
+        with urllib.request.urlopen(req, timeout=60) as r:
+            resp = _json.load(r)
+        audio_url = resp["output"]["audio"].get("url")
+        if not audio_url:
+            raise Exception("语音接口没返回音频地址: " + _json.dumps(resp, ensure_ascii=False))
+        # 下载成临时小文件，文件名带段号，防止几段互相覆盖
+        part_path = os.path.join("static", "tts_part_" + str(i) + ".wav")
+        urllib.request.urlretrieve(audio_url, part_path)
+        return part_path
 
-    audio = resp["output"]["audio"]
-    audio_url = audio.get("url")
-    if not audio_url:
-        raise Exception("语音接口没返回音频地址: " + _json.dumps(resp, ensure_ascii=False))
+    # ---------- 第3步：并行合成（照第3课 run_one 描红） ----------
+    parts = split_sentences(text)
+    def synth_job(pair):              # pair 是 (段号, 段文字) 的打包件
+        i, piece = pair               # 拆包：段号给 i，文字给 piece
+        return synth_one(piece, i)
+    part_paths = []
+    try:
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            part_paths = list(pool.map(synth_job, enumerate(parts)))
 
-    # 把声音文件下载到 static/ 文件夹（网页只能从这个文件夹拿文件）
-    save_path = os.path.join("static", filename)
-    urllib.request.urlretrieve(audio_url, save_path)
+        # ---------- 第4步：wave 拼接 ----------
+        with wave.open(save_path, "wb") as out_wav:
+            first_fmt = None
+            for pp in part_paths:
+                with wave.open(pp, "rb") as w:
+                    fmt = (w.getnchannels(), w.getsampwidth(), w.getframerate())
+                    if first_fmt is None:          # 第一段：记住格式三件套并写入头部
+                        first_fmt = fmt
+                        out_wav.setnchannels(fmt[0])
+                        out_wav.setsampwidth(fmt[1])
+                        out_wav.setframerate(fmt[2])
+                    elif fmt != first_fmt:
+                        continue                       # 格式不一致的段才跳过
+                    out_wav.writeframes(w.readframes(w.getnframes()))
+    except Exception:
+        # 拼接中途炸掉：把半成品删掉，防止坏文件被缓存系统当成"已合成"
+        if os.path.exists(save_path):
+            os.remove(save_path)
+        raise
+    finally:
+        # 收尾：删掉临时小文件，别把 static 塞满（哪怕中途出错也要清场）
+        for pp in part_paths:
+            try:
+                os.remove(pp)
+            except OSError:
+                pass
+
     return "/static/" + filename
