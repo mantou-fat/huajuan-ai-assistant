@@ -343,6 +343,20 @@ TOOLS = [
             }
         }
     },
+{
+    "type": "function",
+    "function": {
+        "name": "search_knowledge",
+        "description": "查询本地知识库。用户问概念、知识、事实类问题（如'什么是RAG''embedding是什么'）时，先调用此工具查资料，再基于资料回答",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "检索关键词"}
+            },
+            "required": ["query"]
+        }
+    }
+},
 
 ]
 
@@ -671,27 +685,6 @@ def create_stream(messages, tools=TOOLS,on_text=None):
     ]
     return {"content": content, "tool_calls": tcs, "finish_reason": finish}
 
-TOOL_FUNCS = {
-    "get_time": get_time,
-    "get_weather": get_weather,
-    "set_reminder": set_reminder,
-    "set_expense": set_expense,
-    "query_expenses": query_expenses,
-    "read_webpage": read_webpage,
-    "list_files": list_files,
-    "read_file": read_file,
-    "write_file": write_file,
-    "web_search": web_search,
-    "generate_song": generate_song,
-    "set_timer": set_timer,
-    "open_app": open_app,
-    "create_reminder": create_reminder,
-    "open_program": open_program,
-    "take_screenshot": take_screenshot,
-    "lock_screen": lock_screen,
-
-}
-
 def load_knowledge(file_path):
     with open(file_path, 'r', encoding='utf-8') as f:
         return [line.strip() for line in f if line.strip()]
@@ -746,6 +739,14 @@ def top_k_search(query, k=3, threshold=0.35):
         if score >= threshold and len(results) < k:
             results.append(knowledge_base[i])
     return results
+
+def search_knowledge(query):
+    """调用工具，查本地知识库"""
+    results = top_k_search(query, k=3, threshold=0.35)
+    if not results:
+        return "知识库里没找到相关内容"
+    return "\n\n".join(results)
+
 def retrieve_memory(query, k=4, threshold=0.35):
     """按相似度从记忆里召回最相关的几条，而不是全量塞给模型"""
     global _mem_embeddings
@@ -1145,6 +1146,35 @@ def after_reply_jobs(user_input, full_reply):
             save_mood(data)
     except Exception as e:
         print("幕后任务失败：", e)
+TOOL_FUNCS = {
+    "get_time": get_time,
+    "get_weather": get_weather,
+    "set_reminder": set_reminder,
+    "set_expense": set_expense,
+    "query_expenses": query_expenses,
+    "read_webpage": read_webpage,
+    "list_files": list_files,
+    "read_file": read_file,
+    "write_file": write_file,
+    "web_search": web_search,
+    "generate_song": generate_song,
+    "set_timer": set_timer,
+    "open_app": open_app,
+    "create_reminder": create_reminder,
+    "open_program": open_program,
+    "take_screenshot": take_screenshot,
+    "lock_screen": lock_screen,
+    "search_knowledge": search_knowledge,
+}
+# ===== 知识题硬性判断：规则引擎（关键词匹配，确定性，不会看走眼）=====
+KNOWLEDGE_KEYWORDS = ["什么是", "是什么", "怎么用", "如何", "原理", "区别", "对比",
+                      "rag", "embedding", "向量", "检索", "召回", "token", "flask",
+                      "api", "prompt", "流式", "sse", "函数调用", "工具调用", "agent", "智能体"]
+
+def looks_like_knowledge(text):
+    """规则引擎：像知识题就返回 True"""
+    low = text.lower()
+    return any(kw in low for kw in KNOWLEDGE_KEYWORDS)
 
 def get_reply(user_input, print_stream=False, on_text=None, on_tool=None):
     """输入问题，返回回答。print_stream=True 时边生成边打印（命令行用）"""
@@ -1153,33 +1183,31 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None):
     PHONE_ACTIONS.clear()  # 每轮开头清空登记，防止上一轮的"单子"残留被下轮带走
 
     with chat_lock:  # 防止多线程并发时 messages 串话
-        if is_knowledge_question(user_input):
-            refs = top_k_search(user_input, k=2)
-            if refs:
-                user_msg = "资料：\n" + "\n".join(refs) + f"\n\n问题：{user_input}"
-            else:
-                user_msg = user_input
-        else:
-            user_msg = user_input
+        user_msg = user_input
+        # 知识题硬性兜底：命中关键词就强制检索并注入资料，模型没有"不查"的选项
+        if looks_like_knowledge(user_msg):
+            kb = top_k_search(user_msg, k=2)
+            if kb:
+                user_msg += "\n\n【知识库资料】\n" + "\n".join(kb) + "\n（以上是知识库检索到的内容，请基于它回答；如与问题无关可忽略）"
 
-        messages.append({"role": "user", "content": user_msg})
+    messages.append({"role": "user", "content": user_msg})
 
-        system_msg = [m for m in messages if m["role"] == "system"]
-        summary = load_summary()
-        if summary.get("summary"):
-                system_msg = system_msg + [{"role": "system", "content": "更早对话的摘要：\n" + summary["summary"]}]
+    system_msg = [m for m in messages if m["role"] == "system"]
+    summary = load_summary()
+    if summary.get("summary"):
+            system_msg = system_msg + [{"role": "system", "content": "更早对话的摘要：\n" + summary["summary"]}]
 
-        non_system = [m for m in messages if m["role"] != "system"]
+    non_system = [m for m in messages if m["role"] != "system"]
                 # RAG 记忆召回：每轮按当前问题现场检索，只带相关的，用完即扔不进 history
-        recalled = retrieve_memory(user_input, k=3, threshold=0.55)
-        if recalled:
+    recalled = retrieve_memory(user_input, k=3, threshold=0.55)
+    if recalled:
             system_msg = system_msg + [{"role": "system", "content": "跟当前问题相关的记忆：\n" + "\n".join(recalled)}]
         
-        messages_to_send = system_msg + non_system[-MAX_MESSAGES:]
+    messages_to_send = system_msg + non_system[-MAX_MESSAGES:]
 
-        failed = False
+    failed = False
        
-        try:
+    try:
             base = len(messages)
             result = create_stream(messages_to_send, on_text=on_text)
             steps = 0
@@ -1200,22 +1228,22 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None):
             del messages[base:]
             if print_stream:
                 print("AI:", full_reply)
-        except Exception as e:
+    except Exception as e:
             print(f"请求失败：{e}")
             full_reply = "抱歉，服务暂时不可用，请稍后再试"
             failed = True
 
         
         # 保险丝：把模型漏网的括号旁白删掉（规则和直播出口共用 clean_aside）
-        full_reply = clean_aside(full_reply)
+    full_reply = clean_aside(full_reply)
 
         # 删掉旁白后可能留下行首行尾多余空格和空行
-        full_reply = "\n".join(line.strip() for line in full_reply.split("\n") if line.strip())
+    full_reply = "\n".join(line.strip() for line in full_reply.split("\n") if line.strip())
 
-        messages.append({"role": "assistant", "content": full_reply})
+    messages.append({"role": "assistant", "content": full_reply})
 
         # 请求失败时不再白跑记忆/心情两次 API，直接存盘返回
-        if not failed:
+    if not failed:
             threading.Thread(
                 target=after_reply_jobs,
                 args=(user_input, full_reply),
@@ -1224,13 +1252,13 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None):
 
 
         # 存盘前截断：只保留 system 消息 + 最近 MAX_MESSAGES 条对话，防止 history.json 无限膨胀
-        system_msgs = [m for m in messages if m["role"] == "system"]
-        non_system_msgs = [m for m in messages if m["role"] != "system"]
-        if len(non_system_msgs) > MAX_MESSAGES:
-            dropped = non_system_msgs[:-MAX_MESSAGES]
-            compress_history(dropped)
-        messages[:] = system_msgs + non_system_msgs[-MAX_MESSAGES:]
-        save_history(messages)
+    system_msgs = [m for m in messages if m["role"] == "system"]
+    non_system_msgs = [m for m in messages if m["role"] != "system"]
+    if len(non_system_msgs) > MAX_MESSAGES:
+        dropped = non_system_msgs[:-MAX_MESSAGES]
+        compress_history(dropped)
+    messages[:] = system_msgs + non_system_msgs[-MAX_MESSAGES:]
+    save_history(messages)
 
     return full_reply
 
