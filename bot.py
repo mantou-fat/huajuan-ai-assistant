@@ -378,7 +378,7 @@ TOOLS = [
     "type": "function",
     "function": {
         "name": "look_around",
-        "description": "打开摄像头看一眼眼前的画面，报告看到的人和物品。用户说'看看你面前有什么''你现在能看到什么''看一眼'时调用。只能认出常见物体（人、杯子、手机等）",
+        "description": "打开摄像头看一眼眼前的画面，报告看到的人和物品。当用户表达'看看我在干啥''看看我在做什么''看一眼我在干嘛''看看你面前有什么''你现在能看到什么''看一眼'等想看当前画面的意图时，**必须调用此工具**，不要说自己看不到。只能认出常见物体（人、杯子、手机等）",
         "parameters": {
             "type": "object",
             "properties": {},
@@ -764,7 +764,7 @@ def set_expense(item, amount):
         return f"记账失败：{e}"
 
     
-def create_stream(messages, tools=TOOLS,on_text=None,model="qwen-plus"):
+def create_stream(messages, tools=TOOLS,on_text=None,model="qwen-plus", tool_choice="auto"):
     stream = client.chat.completions.create(
         model=model,
         messages=messages,
@@ -772,6 +772,7 @@ def create_stream(messages, tools=TOOLS,on_text=None,model="qwen-plus"):
         max_tokens=4000,
         top_p=0.9,
         tools=tools,
+        tool_choice=tool_choice,
         stream=True
     )
     content = ""
@@ -1345,6 +1346,12 @@ def looks_like_knowledge(text):
     low = text.lower()
     return any(kw in low for kw in KNOWLEDGE_KEYWORDS)
 
+VISION_KEYWORDS = ["看看我", "看看你在", "看看你", "看一眼", "看我", "看屏幕", "看摄像头", "看前面", "看前面", "打开摄像头", "你那边", "你这边", "我这边"]
+
+def looks_like_vision(text):
+    """规则引擎：像想看画面的请求就返回 True"""
+    return any(kw in text for kw in VISION_KEYWORDS)
+
 def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=None):
     """输入问题，返回回答。print_stream=True 时边生成边打印（命令行用）"""
     # 防御：接口传进来的不一定是字符串
@@ -1398,11 +1405,16 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=
         ]}
     messages_to_send = system_msg + tail
 
+    if looks_like_vision(user_input):
+        force_tool = {"type": "function", "function": {"name": "look_around"}}
+    else:
+        force_tool = "auto"
+
     failed = False
        
     try:
             base = len(messages)
-            result = create_stream(messages_to_send, on_text=on_text,model="qwen-vl-max"if image else "qwen-plus")
+            result = create_stream(messages_to_send, on_text=on_text,model="qwen-vl-max"if image else "qwen-plus", tool_choice=force_tool)
             steps = 0
             while result["finish_reason"] == "tool_calls" and steps < 5:
                 steps += 1
