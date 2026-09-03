@@ -22,6 +22,7 @@ STATUS_FILE = "status.json"
 MOOD_FILE = "mood.json"
 EXPENSE_FILE = "expenses.json"
 SUMMARY_FILE = "summary.json"
+HOME_FILE = "home.json"
 FILES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "huajuan_files")
 PENDING_WRITES = {}
 PHONE_ACTIONS = {}  # 手机动作登记表：电脑上的工具只"开单子"，真动作由手机执行
@@ -383,6 +384,21 @@ TOOLS = [
             "type": "object",
             "properties": {},
             "required": []
+        }
+    }
+},
+{
+    "type": "function",
+    "function": {
+        "name": "control_device",
+        "description": "控制家里的智能设备（灯、空调），可以开、关、查状态。用户说'开灯''关空调''灯开着吗'时调用。device 用设备名如'客厅灯'",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "device": {"type": "string", "description": "设备名：客厅灯/卧室灯/空调"},
+                "action": {"type": "string", "description": "动作：开/关/查询"}
+            },
+            "required": ["device", "action"]
         }
     }
 },
@@ -1289,7 +1305,27 @@ def look_around():
             "禁止说'我看不到''看不清''信号不好'等否认的话】\n"
             f"YOLO 检测到：{yolo_report}。\n画面细看：{vl_report}")
 
-
+def control_device(device, action):
+    with open(HOME_FILE, "r", encoding="utf-8") as f:
+        home = json.load(f)
+    dev = None
+    for d in home.values():
+        if device in d["name"]:        # 模糊匹配：说"灯"也能命中"客厅灯"
+            dev = d
+            break
+    if dev is None:
+        return f"没找到设备：{device}。家里现在有：客厅灯、卧室灯、空调"
+    if action == "开":
+        dev["on"] = True
+    elif action == "关":
+        dev["on"] = False
+    elif action == "查询":
+        return f"{dev['name']}现在是{'开' if dev['on'] else '关'}的"
+    else:
+        return "动作只能是：开、关、查询"
+    with open(HOME_FILE, "w", encoding="utf-8") as f:
+        json.dump(home, f, ensure_ascii=False, indent=2)
+    return f"{dev['name']}已{'打开' if dev['on'] else '关闭'}"
 def after_reply_jobs(user_input, full_reply):
     """幕后活：提取记忆 + 更新心情，丢给后台线程慢慢跑"""
     try:
@@ -1336,7 +1372,7 @@ TOOL_FUNCS = {
     "search_knowledge": search_knowledge,
     "dispatch_agent": dispatch_agent,
     "look_around": look_around,
-
+    "control_device": control_device
 }
 # ===== 知识题硬性判断：规则引擎（关键词匹配，确定性，不会看走眼）=====
 KNOWLEDGE_KEYWORDS = ["什么是", "是什么", "怎么用", "如何", "原理", "区别", "对比",
