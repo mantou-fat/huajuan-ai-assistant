@@ -1284,8 +1284,10 @@ def look_around():
     else:
         vl_report = "照片打包失败"
 
-    # ---- 合并汇报 ----
-    return f"YOLO 检测到：{yolo_report}。画面细看：{vl_report}"
+    # ---- 合并汇报（开头黑体字是写给模型看的：这是真实画面，必须照实转述） ----
+    return ("【系统：以下是你通过摄像头亲眼看到的真实画面，回答必须完全基于这两条内容，"
+            "禁止说'我看不到''看不清''信号不好'等否认的话】\n"
+            f"YOLO 检测到：{yolo_report}。\n画面细看：{vl_report}")
 
 
 def after_reply_jobs(user_input, full_reply):
@@ -1346,11 +1348,25 @@ def looks_like_knowledge(text):
     low = text.lower()
     return any(kw in low for kw in KNOWLEDGE_KEYWORDS)
 
-VISION_KEYWORDS = ["看看我", "看看你在", "看看你", "看一眼", "看我", "看屏幕", "看摄像头", "看前面", "看前面", "打开摄像头", "你那边", "你这边", "我这边"]
+# 强触发：句子里有这些，基本就是要看画面
+VISION_STRONG = ["打开摄像头", "看摄像头", "摄像头里", "看看镜头", "看看我在干", "看一眼我在", "看我在干",
+                 "你面前有什么", "你现在能看到", "能看到什么"]
+# 弱触发：单独出现可能是看画面，也可能后面跟着别的宾语
+VISION_WEAK = ["看看我", "看我", "看一眼", "看看你", "看屏幕", "看前面", "我这边", "你那边", "你这边"]
+# 排除词：弱触发命中后句子里出现这些，说明用户要看的是文字内容，不开摄像头
+VISION_EXCLUDE = ["文章", "代码", "简历", "写的", "写得", "邮件", "消息", "作业", "报错", "错误", "问题",
+                  "这个", "那张", "图片", "照片", "截图", "翻译", "天气", "下雨"]
 
 def looks_like_vision(text):
     """规则引擎：像想看画面的请求就返回 True"""
-    return any(kw in text for kw in VISION_KEYWORDS)
+    if any(kw in text for kw in VISION_STRONG):
+        return True
+    if any(kw in text for kw in VISION_WEAK):
+        # 弱词命中后，句子里有"内容宾语"就放行给正常聊天
+        if any(kw in text for kw in VISION_EXCLUDE):
+            return False
+        return True
+    return False
 
 def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=None):
     """输入问题，返回回答。print_stream=True 时边生成边打印（命令行用）"""
@@ -1405,8 +1421,12 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=
         ]}
     messages_to_send = system_msg + tail
 
-    if looks_like_vision(user_input):
+    vision_hit = looks_like_vision(user_input)
+    if vision_hit:
         force_tool = {"type": "function", "function": {"name": "look_around"}}
+        # 本回合强制指令：让她知道工具返回的就是亲眼所见，必须照实说
+        system_msg = system_msg + [{"role": "system", "content": "【本回合强制指令】用户想让你看摄像头画面：你必须调用 look_around 工具；工具返回的内容就是你亲眼看到的真实画面，回答必须完全基于它，用你的口吻讲给馒头听。禁止说'我看不到''逗你的''信号不好'等否认的话，也不要干巴巴复读工具结果。"}]
+        messages_to_send = system_msg + tail
     else:
         force_tool = "auto"
 
@@ -1416,7 +1436,7 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=
             base = len(messages)
             result = create_stream(messages_to_send, on_text=on_text,model="qwen-vl-max"if image else "qwen-plus", tool_choice=force_tool)
             steps = 0
-            while result["finish_reason"] == "tool_calls" and steps < 5:
+            while (result["finish_reason"] == "tool_calls" or result["tool_calls"]) and steps < 5:
                 steps += 1
                 msg = {"role": "assistant", "content": "", "tool_calls": result["tool_calls"]}  # content 传空：防止模型把第一轮过渡话当成已回复，第二轮不转述工具结果
                 messages.append(msg)
