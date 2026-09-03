@@ -1,7 +1,7 @@
 
 from flask import Flask, request, jsonify, send_file, Response, json
 
-from bot import get_reply, clear_history, load_memory, load_status, get_greeting, delete_memory, load_mood,tts,user_location,check_reminders,expense_summary,PHONE_ACTIONS
+from bot import get_reply, clear_history, load_memory, load_status, get_greeting, delete_memory, load_mood,tts,user_location,check_reminders,expense_summary,PHONE_ACTIONS,control_device
 import queue
 import threading
 
@@ -33,6 +33,9 @@ HTML = """
   padding: 10px;
   font-size: 20px;
 }
+
+.home-bar { padding: 8px 14px; font-size: 13px; background: rgba(255,255,255,0.06); border-bottom: 1px solid rgba(255,255,255,0.08); }
+.dev-btn { margin: 2px 6px; padding: 3px 10px; border: none; border-radius: 12px; cursor: pointer; font-size: 12px; background: rgba(255,255,255,0.12); color: #eee; }
 
 .header-btns button {
   background: rgba(255,255,255,0.25);
@@ -205,6 +208,7 @@ HTML = """
    <div class="status-bar" id="statusBar" onclick="loadStatus()" title="点击重新加载">__STATUS__</div>
    <div class="mood-bar" id="moodBar" onclick="loadMood()" title="点击重新加载">__MOOD__</div>
    <div class="expense-bar" id="expenseBar" onclick="loadStatus()">本月账本：加载中...</div>
+   <div class="home-bar" id="homeBar">我的家：加载中...</div>
    <div id="chat"></div>
    <div id="previewArea" style="display:none"><img id="imgPreview" alt="待发送图片"></div>
    <div class = "input-bar">
@@ -396,6 +400,39 @@ HTML = """
     btn.title = autoPlay ? '自动朗读：开' : '自动朗读：关';
     }
 
+    async function loadHome() {
+      const bar = document.getElementById('homeBar');
+      try {
+        const res = await fetch('/home');
+        const home = await res.json();
+        let html = '<span>我的家：</span>';
+        for (const key in home) {
+          const d = home[key];
+          const btn = d.on ? '💡 开' : '🌑 关';
+          html += '<button class="dev-btn" onclick="toggleDevice(\'' + d.name + '\')">' + d.name + ' ' + btn + '</button>';
+        }
+        bar.innerHTML = html;
+      } catch (e) {
+        bar.innerHTML = '<span>我的家：</span>加载失败';
+      }
+    }
+
+    async function toggleDevice(name) {
+      const res = await fetch('/home/control', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({device: name, action: '查询'})
+      });
+      const data = await res.json();
+      const isOn = data.result.includes('开的');
+      await fetch('/home/control', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({device: name, action: isOn ? '关' : '开'})
+      });
+      loadHome();
+    }
+
     async function loadStatus() {
       
       const bar = document.getElementById('statusBar');
@@ -496,6 +533,7 @@ HTML = """
     }
 
     loadStatus();               // 页面打开时加载近况
+    loadHome();                 // 页面打开时加载家里设备状态
     setInterval(loadStatus, 10000); // 10秒后再试一次，防止偶发失败
 
     async function delMem(i) {
@@ -630,6 +668,18 @@ def tts_api():
         return jsonify({"audio_url": audio_path})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+@app.route("/home")
+def home_api():
+    with open("home.json", "r", encoding="utf-8") as f:
+        return jsonify(json.load(f))
+
+@app.route("/home/control", methods=["POST"])
+def home_control_api():
+    data = request.get_json()
+    result = control_device(data.get("device", ""), data.get("action", ""))
+    with open("home.json", "r", encoding="utf-8") as f:
+        return jsonify({"result": result, "home": json.load(f)})
+    
 @app.route("/chat_stream", methods=["POST"])
 def chat_stream_api():
     data = request.get_json()
