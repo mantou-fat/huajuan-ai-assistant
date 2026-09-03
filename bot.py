@@ -7,6 +7,7 @@ import queue
 import threading 
 from concurrent.futures import ThreadPoolExecutor  # 第3课：多手下并行干活靠它
 import requests
+import base64
 from openai import OpenAI
 import numpy as np
 from bs4 import BeautifulSoup
@@ -370,6 +371,18 @@ TOOLS = [
                 "task": {"type": "string", "description": "交给子AI的完整任务描述，要说清要求"}
             },
             "required": ["agent", "task"]
+        }
+    }
+},
+{
+    "type": "function",
+    "function": {
+        "name": "look_around",
+        "description": "打开摄像头看一眼眼前的画面，报告看到的人和物品。用户说'看看你面前有什么''你现在能看到什么''看一眼'时调用。只能认出常见物体（人、杯子、手机等）",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": []
         }
     }
 },
@@ -751,9 +764,9 @@ def set_expense(item, amount):
         return f"记账失败：{e}"
 
     
-def create_stream(messages, tools=TOOLS,on_text=None):
+def create_stream(messages, tools=TOOLS,on_text=None,model="qwen-plus"):
     stream = client.chat.completions.create(
-        model="qwen-plus",
+        model=model,
         messages=messages,
         temperature=0.8,
         max_tokens=4000,
@@ -1225,6 +1238,54 @@ def is_knowledge_question(user_input):
     )
     result = resp.choices[0].message.content.strip()
     return "查资料" in result
+_yolo_model = None   # 全局缓存：模型只加载一次
+
+def look_around():
+    global _yolo_model
+    if _yolo_model is None:
+        from ultralytics import YOLO
+        _yolo_model = YOLO("yolov8n.pt")
+    import cv2
+    cap = cv2.VideoCapture(0)
+    ok, frame = cap.read()
+    cap.release()
+    if not ok:
+        return "摄像头打开失败，可能被别的程序占用了"
+
+    # ---- 第一双眼睛：YOLO 哨兵报点 ----
+    r = _yolo_model.predict(frame, verbose=False, imgsz=320)[0]
+    counts = {}
+    for cls in r.boxes.cls:
+        name = r.names[int(cls)]
+        counts[name] = counts.get(name, 0) + 1
+    if counts:
+        yolo_report = "、".join(f"{n} {c}个" if c > 1 else n for n, c in counts.items())
+    else:
+        yolo_report = "没认出明确的物体"
+
+    # ---- 第二双眼睛：qwen-vl 顾问细看 ----          
+    ok2, buf = cv2.imencode(".jpg", frame)             
+    if ok2:                                           
+        b64 = base64.b64encode(buf).decode()           
+        image_url = "data:image/jpeg;base64," + b64    
+        try:                                           
+            resp = client.chat.completions.create(    
+                model="qwen-vl-max",
+                messages=[{"role": "user", "content": [
+                    {"type": "text", "text": "用一两句话描述这个画面的主要内容和人物动作。"},
+                    {"type": "image_url", "image_url": {"url": image_url}}
+                ]}],
+                max_tokens=100                         
+            )
+            vl_report = resp.choices[0].message.content.strip()   
+        except Exception:
+            vl_report = "细看环节失败了"                
+    else:
+        vl_report = "照片打包失败"
+
+    # ---- 合并汇报 ----
+    return f"YOLO 检测到：{yolo_report}。画面细看：{vl_report}"
+
 
 def after_reply_jobs(user_input, full_reply):
     """幕后活：提取记忆 + 更新心情，丢给后台线程慢慢跑"""
@@ -1271,7 +1332,7 @@ TOOL_FUNCS = {
     "lock_screen": lock_screen,
     "search_knowledge": search_knowledge,
     "dispatch_agent": dispatch_agent,
-
+    "look_around": look_around,
 
 }
 # ===== 知识题硬性判断：规则引擎（关键词匹配，确定性，不会看走眼）=====
@@ -1284,7 +1345,7 @@ def looks_like_knowledge(text):
     low = text.lower()
     return any(kw in low for kw in KNOWLEDGE_KEYWORDS)
 
-def get_reply(user_input, print_stream=False, on_text=None, on_tool=None):
+def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=None):
     """输入问题，返回回答。print_stream=True 时边生成边打印（命令行用）"""
     # 防御：接口传进来的不一定是字符串
     user_input = str(user_input) if user_input is not None else ""
@@ -1304,7 +1365,11 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None):
         if mr_note:
             user_msg += mr_note
 
-    messages.append({"role": "user", "content": user_msg})
+    if image:
+        messages.append({"role": "user", "content": "[图片] " + user_msg})
+    else:
+        messages.append({"role": "user", "content": user_msg})
+
 
     system_msg = [m for m in messages if m["role"] == "system"]
     summary = load_summary()
@@ -1313,12 +1378,7 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None):
 
     non_system = [m for m in messages if m["role"] != "system"]
                 # RAG 记忆召回：每轮按当前问题现场检索，只带相关的，用完即扔不进 history
-    # 包 try：召回失败（比如接口欠费/超时）只损失记忆，不拖垮整轮聊天
-    try:
-        recalled = retrieve_memory(user_input, k=3, threshold=0.55)
-    except Exception as e:
-        print("记忆召回失败（跳过，不影响聊天）：", e)
-        recalled = []
+    recalled = retrieve_memory(user_input, k=3, threshold=0.55)
     if recalled:
             system_msg = system_msg + [{"role": "system", "content": "跟当前问题相关的记忆：\n" + "\n".join(recalled)}]
     # 点名派手下兜底：命中"派翻译官/找文案师/派个AI"等说法就注入本轮回合强指令。
@@ -1330,13 +1390,19 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None):
     if re.search(r'(派|找|叫|请|让)(翻译官|文案师|资料员|代码员|个AI|手下)', user_input):
         system_msg = system_msg + [{"role": "system", "content": "【本轮回合强制指令】馒头点名要派手下：你必须调用 dispatch_agent 工具，从名册里挑对的人（翻译官/文案师/资料员/代码员）。一次派多个手下时，必须为每个手下各发一次 dispatch_agent 调用，一个都不许漏。等所有子AI结果都回来后，按顺序逐条贴出每个结果的内容本体（译文念译文、文案贴文案、要点逐条列），每条前加【翻译官】【文案师】这类标签；有几个结果就贴几条，禁止漏贴、禁止只点评不转述、禁止说'都转给你了/收着啦'却没贴内容。禁止自己代劳翻译/写作/总结。"}]
         
-    messages_to_send = system_msg + non_system[-MAX_MESSAGES:]
+    tail = non_system[-MAX_MESSAGES:]
+    if image:
+        tail[-1] = {"role": "user", "content": [
+            {"type": "text", "text": user_msg},
+            {"type": "image_url", "image_url": {"url": image}}
+        ]}
+    messages_to_send = system_msg + tail
 
     failed = False
        
     try:
             base = len(messages)
-            result = create_stream(messages_to_send, on_text=on_text)
+            result = create_stream(messages_to_send, on_text=on_text,model="qwen-vl-max"if image else "qwen-plus")
             steps = 0
             while result["finish_reason"] == "tool_calls" and steps < 5:
                 steps += 1
@@ -1435,7 +1501,7 @@ def tts(text, filename="tts_latest.wav"):
     # 缓存：用文字的 MD5 当文件名，同一段文字只合成一次
     filename = hashlib.md5(text.encode("utf-8")).hexdigest()[:16] + ".wav"
     save_path = os.path.join("static", filename)
-    if os.path.exists(save_path):
+    if os.path.exists(save_path) and os.path.getsize(save_path) > 0:
         return "/static/" + filename   # 已有现成音频，秒回
 
     # ---------- 第1步：切段 ----------
@@ -1486,41 +1552,33 @@ def tts(text, filename="tts_latest.wav"):
         urllib.request.urlretrieve(audio_url, part_path)
         return part_path
 
-    # ---------- 第3步：并行合成（照第3课 run_one 描红） ----------
+        # ---------- 第3步：并行合成（照第3课 run_one 描红） ----------
     parts = split_sentences(text)
     def synth_job(pair):              # pair 是 (段号, 段文字) 的打包件
         i, piece = pair               # 拆包：段号给 i，文字给 piece
         return synth_one(piece, i)
-    part_paths = []
-    try:
-        with ThreadPoolExecutor(max_workers=4) as pool:
-            part_paths = list(pool.map(synth_job, enumerate(parts)))
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        part_paths = list(pool.map(synth_job, enumerate(parts)))
 
-        # ---------- 第4步：wave 拼接 ----------
-        with wave.open(save_path, "wb") as out_wav:
-            first_fmt = None
-            for pp in part_paths:
-                with wave.open(pp, "rb") as w:
-                    fmt = (w.getnchannels(), w.getsampwidth(), w.getframerate())
-                    if first_fmt is None:          # 第一段：记住格式三件套并写入头部
-                        first_fmt = fmt
-                        out_wav.setnchannels(fmt[0])
-                        out_wav.setsampwidth(fmt[1])
-                        out_wav.setframerate(fmt[2])
-                    elif fmt != first_fmt:
-                        continue                       # 格式不一致的段才跳过
-                    out_wav.writeframes(w.readframes(w.getnframes()))
-    except Exception:
-        # 拼接中途炸掉：把半成品删掉，防止坏文件被缓存系统当成"已合成"
-        if os.path.exists(save_path):
-            os.remove(save_path)
-        raise
-    finally:
-        # 收尾：删掉临时小文件，别把 static 塞满（哪怕中途出错也要清场）
+
+    # ---------- 第4步：wave 拼接 ----------
+    with wave.open(save_path, "wb") as out_wav:
+        first_params = None
         for pp in part_paths:
-            try:
-                os.remove(pp)
-            except OSError:
-                pass
+            with wave.open(pp, "rb") as w:
+                fmt = (w.getnchannels(), w.getsampwidth(), w.getframerate())
+                if first_params is None:          # 第一段：只记住格式三件套
+                    first_params = fmt
+                    out_wav.setnchannels(fmt[0])
+                    out_wav.setsampwidth(fmt[1])
+                    out_wav.setframerate(fmt[2])
+                elif fmt != first_params:
+                    continue                       # 格式不一致的段才跳过
+                out_wav.writeframes(w.readframes(w.getnframes()))
+
+
+    # 收尾：删掉临时小文件，别把 static 塞满
+    for pp in part_paths:
+        os.remove(pp)
 
     return "/static/" + filename

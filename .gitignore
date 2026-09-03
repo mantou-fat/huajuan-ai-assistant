@@ -19,3 +19,10 @@ summary.json
 static/*.wav
 video_frames/
 video_frames2/
+*.pt
+yolo_out.jpg
+bus_test.jpg
+test_pic.jpg
+test_vision.py
+yolo_test.py
+yolo_cam.py
