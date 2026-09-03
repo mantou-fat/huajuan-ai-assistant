@@ -78,6 +78,22 @@ HTML = """
   padding: 10px;            /* 内边距，别贴边 */
 }
 
+#previewArea {
+  padding: 6px 12px;
+  margin: 0 10px 6px 10px;
+  background: rgba(255,255,255,0.9);
+  border: 2px dashed #4CAF50;
+  border-radius: 10px;
+  text-align: center;
+  display: none;
+}
+#previewArea img {
+  max-height: 90px;
+  max-width: 180px;
+  border-radius: 8px;
+  display: inline-block;
+}
+
 .user {
   max-width: 70%;               /* 最宽占七成，不会横贯全屏 */
   padding: 10px 14px;           /* 内边距：文字离泡边远一点 */
@@ -190,10 +206,14 @@ HTML = """
    <div class="mood-bar" id="moodBar" onclick="loadMood()" title="点击重新加载">__MOOD__</div>
    <div class="expense-bar" id="expenseBar" onclick="loadStatus()">本月账本：加载中...</div>
    <div id="chat"></div>
+   <div id="previewArea" style="display:none"><img id="imgPreview" alt="待发送图片"></div>
    <div class = "input-bar">
-    <input id="msg" placeholder="跟花卷说点什么..." onkeydown="if(event.key==='Enter')send()">
-    <button onclick="send()">发送</button>
-    <button id="micBtn" onclick="toggleMic()">🎤</button>
+  <input id="msg" placeholder="跟花卷说点什么..." onkeydown="if(event.key==='Enter')send()">
+  <button onclick="send()">发送</button>
+  <button onclick="document.getElementById('imgInput').click()">📷</button>
+  <input type="file" id="imgInput" accept="image/*" style="display:none" onchange="pickImg(event)">
+  <button id="micBtn" onclick="toggleMic()">🎤</button>
+
     <button id="voiceBtn" onclick="toggleVoice()">🔈</button>
 
     </div>
@@ -214,11 +234,33 @@ HTML = """
             }
         );
     }
-   async function send() {
+  let selectedImg = null;   // 记住当前选的图，没选就是 null
+
+  function pickImg(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();              // 浏览器自带的"读文件"工具
+    reader.onload = function(e) {
+      selectedImg = e.target.result;              // 结果自带 data:image/...;base64, 前缀
+      addImgPreview(selectedImg);                 // 输入框上方亮出缩略图
+    };
+    reader.readAsDataURL(file);                   // 按"文本快递包装"格式读
+    event.target.value = '';                      // 清掉选择记录，允许下次选同一张
+  }
+  function addImgPreview(src) {
+    const area = document.getElementById('previewArea');
+    document.getElementById('imgPreview').src = src;
+    area.style.display = 'block';   // 恢复显示（发送后曾被隐藏，不恢复就"第二次失效"）
+  }
+
+  async function send() {
   const input = document.getElementById('msg');
   const msg = input.value.trim();
   if (!msg) return;
   input.value = '';
+  const imgToSend = selectedImg;                 // 先把图接住，再清状态
+  selectedImg = null;
+  document.getElementById('previewArea').style.display = 'none';
   addMsg(msg, 'user');
   const typing = addMsg('●●●', 'ai');          // 占位气泡（先保持打点动画）
   const typingBubble = typing.querySelector('.ai');
@@ -230,7 +272,7 @@ HTML = """
     const res = await fetch('/chat_stream', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({message: msg})
+      body: JSON.stringify({message: msg, image: imgToSend})
     });
     const reader = res.body.getReader();        // 拧开水龙头
     const decoder = new TextDecoder('utf-8');   // 字节翻译官
@@ -277,7 +319,10 @@ HTML = """
     if (autoPlay) {
       const ttsData = await ttsPromise;
       if (ttsData && ttsData.audio_url) {
-        new Audio(ttsData.audio_url).play();
+        const audio = new Audio(ttsData.audio_url);
+        audio.play().catch(function(err) {
+          console.log('TTS 播放失败:', err);
+        });
       }
     }
 
@@ -589,6 +634,7 @@ def tts_api():
 def chat_stream_api():
     data = request.get_json()
     msg = data.get("message", "")
+    img = data.get("image")
 
     def generate():
         q = queue.Queue()
@@ -600,7 +646,7 @@ def chat_stream_api():
         def worker():
             reply = ""
             try:
-                reply = get_reply(msg, on_text=push, on_tool=tool_push)
+                reply = get_reply(msg, on_text=push, on_tool=tool_push, image=img)
             finally:
                 q.put(("final", reply))          # 定稿全文（已洗过旁白）
                 q.put(None)                      # 哨兵：干完活的信号
