@@ -1,11 +1,8 @@
+# ===== 密钥与个人隐私(绝不提交) =====
 .env
-__pycache__/
-*.log
-backups/
-.pip-tmp/
-.vscode/
-screenshots/
-huajuan_files/
+persona.txt
+knowledge_base.txt
+home.json
 history.json
 memory.json
 memory.json.bak_merge
@@ -16,13 +13,25 @@ seen.json
 expenses.json
 reminders.json
 summary.json
-static/*.wav
+huajuan_files/
+
+# ===== 运行时与测试产物 =====
+__pycache__/
+*.log
+backups/
+.pip-tmp/
+.vscode/
+screenshots/
 video_frames/
 video_frames2/
+static/*.wav
+static/*.mp3
 *.pt
+test_article.txt
+tts_test1.png
 yolo_out.jpg
 bus_test.jpg
 test_pic.jpg
 test_vision.py
 yolo_test.py
-yolo_cam.pyhome.json
+yolo_cam.py
