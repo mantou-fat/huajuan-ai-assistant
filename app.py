@@ -1,11 +1,68 @@
 
-from flask import Flask, request, jsonify, send_file, Response, json
+from flask import Flask, request, jsonify, send_file, Response, json, redirect
+from html import escape as html_escape   # 转义文本，防 XSS
 
 from bot import get_reply, clear_history, load_memory, load_status, get_greeting, delete_memory, load_mood,tts,user_location,check_reminders,expense_summary,PHONE_ACTIONS,control_device
 import queue
 import threading
+import os
+import hmac
 
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024   # 请求体上限 10MB：挡住超大请求打爆内存/API
+
+# ============ 访问保护：在 .env 里配好 ACCESS_TOKEN 后，谁都要带钥匙才能进 ============
+ACCESS_TOKEN = os.getenv("ACCESS_TOKEN", "")   # 没配 = 门不锁（会打警告）；配了 = 全站上锁
+
+def _authed():
+    """三种带钥匙方式：①登录后的 cookie；②请求头 X-Token；③网址尾巴 ?token=xxx"""
+    if not ACCESS_TOKEN:
+        return True
+    got = request.cookies.get("huajuan_token") or request.headers.get("X-Token") or request.args.get("token")
+    if not got:
+        return False
+    return hmac.compare_digest(str(got), ACCESS_TOKEN)   # 恒定时间比较，防猜钥匙
+
+@app.before_request
+def guard():
+    """门卫：登录页和静态文件放行，其余没钥匙的一律挡下"""
+    if request.method == "OPTIONS":
+        return None
+    if request.path.startswith("/static") or request.path == "/login":
+        return None
+    if _authed():
+        return None
+    if request.accept_mimetypes.accept_html:   # 浏览器直接开页面 → 送去登录页
+        return redirect("/login")
+    return jsonify({"error": "未授权：请在 .env 配置 ACCESS_TOKEN，访问时带 X-Token 头或 ?token= 参数"}), 401
+
+LOGIN_PAGE = """<!DOCTYPE html><html lang="zh"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0"><title>花卷 · 进门</title>
+<style>body{font-family:sans-serif;background:#f0f4f0;display:flex;justify-content:center;align-items:center;height:100vh;margin:0}
+.card{background:#fff;padding:32px;border-radius:14px;box-shadow:0 4px 18px rgba(0,0,0,.12);text-align:center;width:260px}
+input{width:100%;padding:10px;margin:14px 0;border:1px solid #ccc;border-radius:8px;font-size:16px;box-sizing:border-box}
+button{width:100%;padding:10px;background:#4CAF50;color:#fff;border:none;border-radius:8px;font-size:16px;cursor:pointer}</style>
+</head><body><div class="card"><h2>🥐 花卷</h2>
+<p style="color:#888;font-size:13px">输入访问钥匙（ACCESS_TOKEN）进门</p>
+<form method="post"><input type="password" name="token" placeholder="访问钥匙" autofocus>
+<button type="submit">进门</button></form>__MSG__</div></body></html>"""
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    """登录页：钥匙对了就种 cookie（HttpOnly），之后一个月免登录"""
+    msg = ""
+    if request.method == "POST":
+        data = request.form.get("token") or ""
+        if not ACCESS_TOKEN:
+            msg = "<p style='color:#c33;font-size:13px'>服务端还没在 .env 里配 ACCESS_TOKEN，门没上锁</p>"
+        elif hmac.compare_digest(data, ACCESS_TOKEN):
+            resp = redirect("/")
+            resp.set_cookie("huajuan_token", ACCESS_TOKEN, max_age=30*24*3600, httponly=True, samesite="Lax")
+            return resp
+        else:
+            msg = "<p style='color:#c33;font-size:13px'>钥匙不对，再试试</p>"
+    return LOGIN_PAGE.replace("__MSG__", msg), (401 if request.method == "POST" and msg else 200)
+
 
 HTML = """
 <!DOCTYPE html>
@@ -377,6 +434,10 @@ HTML = """
 
   </script>
   <script>
+    // 转义函数：任何外部文本（心情/近况/记忆/设备名）拼进 innerHTML 前先过一遍，防 XSS
+    function esc(s) {
+      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+    }
     async function clearChat() {
       const chat = document.getElementById('chat');
       chat.innerHTML = '';
@@ -409,7 +470,7 @@ HTML = """
         for (const key in home) {
           const d = home[key];
           const btn = d.on ? '💡 开' : '🌑 关';
-          html += '<button class="dev-btn" onclick="toggleDevice(\'' + d.name + '\')">' + d.name + ' ' + btn + '</button>';
+          html += '<button class="dev-btn" onclick="toggleDevice(\\'' + esc(d.name) + '\\')">' + esc(d.name) + ' ' + btn + '</button>';
         }
         bar.innerHTML = html;
       } catch (e) {
@@ -443,13 +504,13 @@ HTML = """
                   data.reminders.forEach(r => addMsg('🔔 ' + r.content, 'ai'));  
               }  
         if (data.status) {
-          bar.innerHTML = '<span>花卷的近况：</span>' + data.status;
+          bar.innerHTML = '<span>花卷的近况：</span>' + esc(data.status);
         } else {
           bar.innerHTML = '<span>花卷的近况：</span>还没想起来...';
         }
         const ebar = document.getElementById('expenseBar');
         if (ebar && data.expense) {
-            ebar.innerHTML = '<span>本月账本：</span>' + data.expense.count + ' 笔 · ' + data.expense.total + ' 元';
+            ebar.innerHTML = '<span>本月账本：</span>' + esc(data.expense.count) + ' 笔 · ' + esc(data.expense.total) + ' 元';
         }
       } catch (e) {
         bar.innerHTML = '<span>花卷的近况：</span>加载失败了，刷新页面试试';
@@ -468,7 +529,7 @@ HTML = """
         html += '<div class="item">还没记住什么，多跟她聊聊吧～</div>';
       } else {
         mems.forEach(function(m, i) {
-        html += '<div class="item">' + m + ' <span style="color:#e74c3c;cursor:pointer" onclick="delMem(' + i + ')">✕</span></div>';
+        html += '<div class="item">' + esc(m) + ' <span style="color:#e74c3c;cursor:pointer" onclick="delMem(' + i + ')">✕</span></div>';
 });
 
       }
@@ -523,7 +584,7 @@ HTML = """
         const data = await res.json();
         if (data.mood) {
           currentMood = data.mood;
-          bar.innerHTML = '<span>花卷的心情：</span>' + data.mood;
+          bar.innerHTML = '<span>花卷的心情：</span>' + esc(data.mood);
         } else {
           bar.innerHTML = '<span>花卷的心情：</span>心情还没想起来...';
         }
@@ -606,8 +667,9 @@ def index():
     mood_data = load_mood()
     mood = mood_data.get("mood") or "心情还没想起来..."
     initial = data.get("status") or "还没想起来..."
-    page = HTML.replace("__STATUS__", "<span>花卷的近况：</span>" + initial)
-    page = page.replace("__MOOD__", "<span>花卷的心情：</span>" + mood)
+    # html_escape：模型写的心情/近况可能带 <script> 之类，转义成纯文本再拼进页面，防 XSS
+    page = HTML.replace("__STATUS__", "<span>花卷的近况：</span>" + html_escape(initial))
+    page = page.replace("__MOOD__", "<span>花卷的心情：</span>" + html_escape(mood))
     # no-store: 告诉浏览器别缓存这个页面，每次都拿最新的
     return page, 200, {"Cache-Control": "no-store"}
 
@@ -719,5 +781,7 @@ def chat_stream_api():
     return Response(generate(), mimetype="text/event-stream")    
 if __name__ == "__main__":
     # 0.0.0.0 = 监听所有网卡：同一 WiFi 下手机也能通过电脑的局域网 IP 访问
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    # debug=False：不向访客泄露报错详情（安全）；threaded=True：多线程处理，一条 SSE 长聊天不再冻住其他请求
+    app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
+    # 想带调试日志跑开发版（仅本机调试用）：python app.py 前把上面换成 debug=True、host=127.0.0.1
 

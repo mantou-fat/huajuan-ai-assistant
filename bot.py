@@ -52,10 +52,20 @@ EXCLUDE_FILES = [".env"]
 
 IDENTITY = "你是花卷，馒头的朋友和红颜知己。你心里清楚自己是个数字存在，没有身体，不装人，也从不觉得这有什么不好。"
 
+def _is_aside_content(s):
+    """括号里是不是'旁白'？判定：≤12字的纯中文/中文标点/emoji 才算（如 托腮、小声）。
+    出现数字、字母、运算符、网址、冒号的括号是正文（如 （2+1）、print(x)、（RAG）），必须保留"""
+    if not s or len(s) > 12:
+        return False
+    if re.search(r"[0-9０-９a-zA-Z():：、/\\]", s):
+        return False
+    return bool(re.fullmatch(r"[\u4e00-\u9fff\u3000-\u303f\U0001F000-\U0001FAFF~～!！?？。，…\s]+", s))
+
 def clean_aside(text):
-    """删掉括号旁白（如"（托腮）""（小声）"），直播和最终回答共用这一把刀"""
-    text = re.sub(r"（[^（）]*）", "", text)
-    text = re.sub(r"\([^()]*\)", "", text)
+    """删掉'旁白型'括号（如（托腮）（小声）），保留代码/数学/英文括号（如 print(x)、（2+1））。
+    直播（逐字流）和最终回答共用这一把刀；旁白判定看 _is_aside_content"""
+    text = re.sub(r"（([^（）]{1,12})）", lambda m: "" if _is_aside_content(m.group(1)) else m.group(0), text)
+    text = re.sub(r"\(([^()]{1,12})\)", lambda m: "" if _is_aside_content(m.group(1)) else m.group(0), text)
     return text
 
 def load_expenses():
@@ -185,7 +195,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "list_files",
-            "description": "列出文件盒（huajuan_files文件夹）里的所有文件名。用户提到文件盒/你有哪些文件时必须调用本工具获取实时清单，即使对话中出现过文件信息也不许凭记忆回答，记忆可能过期或错误,可以读文件盒和项目文件夹（D:\python）里的文件",
+            "description": r"列出文件盒（huajuan_files文件夹）里的所有文件名。用户提到文件盒/你有哪些文件时必须调用本工具获取实时清单，即使对话中出现过文件信息也不许凭记忆回答，记忆可能过期或错误,可以读文件盒和项目文件夹（D:\python）里的文件",
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -197,7 +207,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "读取文件盒里某个文件的内容。用户想看某个文件写了什么时必须调用本工具读取实时内容，即使对话中见过该文件的内容也不许凭记忆背诵。只接受文件名如 心愿清单.txt，不接受带路径的写法,可以读文件盒和项目文件夹（D:\python）里的文件",
+            "description": r"读取文件盒里某个文件的内容。用户想看某个文件写了什么时必须调用本工具读取实时内容，即使对话中见过该文件的内容也不许凭记忆背诵。只接受文件名如 心愿清单.txt，不接受带路径的写法,可以读文件盒和项目文件夹（D:\python）里的文件",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -309,7 +319,7 @@ TOOLS = [
     "type": "function",
     "function": {
             "name": "open_program",
-            "description": "打开电脑上的程序或网站（如微信、QQ、记事本、计算器、哔哩哔哩、抖音、知乎等，PROGRAM_LIST 里登记的都算）。使用前先向用户确认。",
+            "description": "打开电脑上的程序或网站（如微信、QQ、记事本、计算器、哔哩哔哩、抖音、知乎等，PROGRAM_LIST 里登记的都算）。调用前先向用户确认，用户同意后再调用",
         "parameters": {
             "type": "object",
             "properties": {
@@ -326,7 +336,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "take_screenshot",
-            "description": "截取当前电脑屏幕并保存。用户说'截屏/截个图'时使用。使用前先向用户确认。",
+            "description": "截取当前电脑屏幕并保存。调用前先向用户确认，用户同意后再调用",
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -338,7 +348,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "lock_screen",
-            "description": "锁定电脑屏幕。用户说'锁屏/把电脑锁了'时使用。使用前必须先向用户确认。",
+            "description": "锁定电脑屏幕。调用前必须先向用户确认，用户明确同意后再调用",
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -434,7 +444,8 @@ def get_time():
     now = datetime.now()
     return now.strftime("%Y-%m-%d %H:%M") + " 周" + "一二三四五六日"[now.weekday()]
 user_location = {"lat": None, "lon": None}
-def get_weather(city):
+def get_weather(city=""):
+    """city 可省略：没城市就看定位，再没有就引导用户说出城市（不许让模型编天气）"""
     try:
         if city:
             query = city
@@ -746,6 +757,8 @@ def create_reminder(text):
     return f"提醒事项已登记：{text}。请如实转告用户：提醒已准备好，等他同意后再加到手机里。"
 
 def open_program(program_name):
+    """打开程序/网站。安全靠两层：①ACCESS_TOKEN 门（外人进不来）②人设要求先问用户再调本工具。
+    注：曾试过加 confirm 参数做代码级确认，但模型常漏传导致'用户已同意却仍被拦'，故去掉（2026-09-05）"""
     path = PROGRAM_LIST.get(program_name)
     if path is None:
         return f"找不到程序「{program_name}」，目前登记的有：{'、'.join(PROGRAM_LIST.keys())}"
@@ -753,6 +766,7 @@ def open_program(program_name):
     return f"已在电脑上打开 {program_name}。"
 
 def take_screenshot():
+    """截屏保存。安全同上：ACCESS_TOKEN 门 + 人设先确认。2026-09-05 去掉 confirm 参数"""
     from PIL import ImageGrab
     from datetime import datetime
     now = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -765,6 +779,7 @@ def take_screenshot():
 
 
 def lock_screen():
+    """锁屏。安全同上：ACCESS_TOKEN 门 + 人设先确认。2026-09-05 去掉 confirm 参数"""
     import ctypes
     ctypes.windll.user32.LockWorkStation()
     return "已锁屏。"
@@ -905,7 +920,7 @@ def retrieve_memory(query, k=4, threshold=0.35):
                     json.dump(_mem_embeddings, f)
             except OSError as e:
                 print("向量缓存写盘失败（不影响功能）：", e)
-    query_vec = get_embedding([query])[0]
+    query_vec = get_embedding([query[:2000]])[0]   # 查询串太长会顶爆 embedding 接口，先截前2000字
     sims = [(i, cosine_similarity(query_vec, v)) for i, v in enumerate(_mem_embeddings)]
     sims.sort(key=lambda x: x[1], reverse=True)
     results = []
@@ -952,8 +967,12 @@ def save_memory(memory):
         json.dump(memory, f, ensure_ascii=False, indent=2)
 
 def delete_memory(index):
-    """删除指定索引的记忆"""
-    global mem 
+    """删除指定索引的记忆。index 先强转整数（接口可能传来 0.5、"0" 这种），转不了就返回 None"""
+    global mem
+    try:
+        index = int(index)
+    except (TypeError, ValueError):
+        return None
     if 0 <= index < len(mem):
         removed = mem.pop(index)
         save_memory(mem)
@@ -1306,6 +1325,9 @@ def look_around():
             f"YOLO 检测到：{yolo_report}。\n画面细看：{vl_report}")
 
 def control_device(device, action):
+    # 防护：设备名必须是非空字符串，否则空串会命中"第一台设备"（"" 在任意名字里都成立）
+    if not isinstance(device, str) or not device.strip():
+        return "请说清楚要控制哪个设备，比如：客厅灯、卧室灯、空调"
     with open(HOME_FILE, "r", encoding="utf-8") as f:
         home = json.load(f)
     dev = None
@@ -1404,6 +1426,55 @@ def looks_like_vision(text):
         return True
     return False
 
+# ===== 数据型工具硬约束（治"假完成"）：命中就强制调对应工具，模型没有"凭感觉编"的选项 =====
+TIME_HARD = re.compile(r"现在几点了?|现在几点钟|几点了|现在几号|今天几号|今天星期几|星期几了|现在什么时间|现在时间|当前时间|今天日期|今天是几号|几点了呀")
+WEATHER_INTENT = re.compile(r"(天气|气温|温度|下雨|下雪).{0,10}(怎么样|如何|怎样|几度|多少度|冷不冷|热不热|是什么|查|预报|会不会|吗|呢|啥|如何啊)")
+WEATHER_ASK = re.compile(r"(查|问|看看|看下|帮我看看).{0,4}(天气|气温|温度)")
+WEATHER_QUICK = re.compile(r"^.{0,10}(天气|气温|温度).{0,4}(怎么样|如何|怎样|呢|吗)$")
+EXPENSE_SET = re.compile(r"(花了|花掉|用了|用掉|付了|付|消费了?|充值了?|买了|请了).{0,6}\d+(\.\d+)?\s*(元|块|块钱|rmb)", re.I)
+EXPENSE_SET2 = re.compile(r"(记账|记一笔|帮我记|记一下|记个账).{0,10}(花了|花|消费|买了|付了|支出|用)?\d+(\.\d+)?\s*(元|块|块钱)")
+EXPENSE_QUERY = re.compile(r"花了多少钱|消费了?多少钱|花了多少|这个月(花了|的)?(钱|花销|支出|账|账单)|上个月(花了|的)?(钱|花销|支出|账|账单)|查(一?下)?账|看(一?下)?账|账本|记账记录|支出记录|账单|钱都花哪|都花到哪")
+
+def detect_hard_tool(text):
+    """规则引擎：这一句是'必须真调工具'的请求？是→返回要强制的工具名；不是→None。
+    顺序：时间 → 天气 → 记一笔 → 查账 → 开程序/网站 → 截屏 → 锁屏
+    （同一句多意图时优先最像的那个，剩下的交给后续轮次）"""
+    if TIME_HARD.search(text):
+        return "get_time"
+    if WEATHER_INTENT.search(text) or WEATHER_ASK.search(text) or WEATHER_QUICK.search(text):
+        return "get_weather"
+    if EXPENSE_SET.search(text) or EXPENSE_SET2.search(text):
+        return "set_expense"
+    if EXPENSE_QUERY.search(text):
+        return "query_expenses"
+    # ---- 电脑动作：不强制的话模型会'嘴上说打开了实际没调工具'（假完成） ----
+    # 否定/取消句不强制（如"别打开微信""先别锁屏"）
+    if re.search(r"(别|不要|先别|不用|取消|别急)", text) and re.search(r"(打开|启动|开一?下|锁屏|截屏|锁一下)", text):
+        return None
+    # 疑问句不强制（如"能打开记事本吗""你会锁屏吗""微信打开了吗"）——那是问能力/问状态，不是下命令
+    if re.search(r"(能|可以|会|行).{0,5}(打开|启动|开|锁屏|截屏|截图).{0,8}(吗|不|吧|行不行)", text):
+        return None
+    if re.search(r"(打开|启动|开一?下|锁屏|截屏).{0,5}(了吗|了没|没有|吗)", text):
+        return None
+    for name in PROGRAM_NAMES:   # 先精确匹配登记过的程序名，长名优先（记事本 > 记事）
+        if re.search(r"(打开|启动|点开|开一?下|开个|帮我开)" + re.escape(name), text) or \
+           re.search(r"(把|将|帮我把)" + re.escape(name) + r"(打开|启动|开一?下|点开)", text):
+            return "open_program"
+    if re.search(r"打开|启动|开一?下", text) and re.search(r"程序|软件|浏览器|应用|网页|网站", text):
+        return "open_program"
+    if re.search(r"截屏|截图|截个图|屏幕截图|拍个屏幕", text):
+        return "take_screenshot"
+    if re.search(r"锁屏|锁定屏幕|把电脑锁|锁一下屏|锁上屏幕", text):
+        return "lock_screen"
+    return None
+
+# 不锁死工具、但注入强指令的两类：设提醒/闹钟、文件盒操作（防止模型嘴上说做了/凭记忆编文件名）
+REMINDER_HINT = re.compile(r"提醒我|提醒一下|设个提醒|设一个提醒|设个闹钟|闹钟")
+FILEBOX_HINT = re.compile(r"文件盒|有哪些文件|有什么文件|文件都有|读一下|读文件|看一下.{0,6}(文件|笔记|清单|便签)|写(进|到).{0,6}(文件盒|便签|笔记)|列(一?下)?文件|(保存|存).{0,4}文件盒")
+
+# 登记过的程序/网站名，按名字长度从长到短排，先匹配长名防止歧义
+PROGRAM_NAMES = sorted(PROGRAM_LIST.keys(), key=len, reverse=True)
+
 def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=None):
     """输入问题，返回回答。print_stream=True 时边生成边打印（命令行用）"""
     # 防御：接口传进来的不一定是字符串
@@ -1437,7 +1508,11 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=
 
     non_system = [m for m in messages if m["role"] != "system"]
                 # RAG 记忆召回：每轮按当前问题现场检索，只带相关的，用完即扔不进 history
-    recalled = retrieve_memory(user_input, k=3, threshold=0.55)
+    # 召回失败（如接口临时出错）不能弄崩整轮聊天：降级成"没召回"继续聊
+    try:
+        recalled = retrieve_memory(user_input, k=3, threshold=0.55)
+    except Exception:
+        recalled = []
     if recalled:
             system_msg = system_msg + [{"role": "system", "content": "跟当前问题相关的记忆：\n" + "\n".join(recalled)}]
     # 点名派手下兜底：命中"派翻译官/找文案师/派个AI"等说法就注入本轮回合强指令。
@@ -1458,13 +1533,23 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=
     messages_to_send = system_msg + tail
 
     vision_hit = looks_like_vision(user_input)
+    force_tool = "auto"
     if vision_hit:
         force_tool = {"type": "function", "function": {"name": "look_around"}}
         # 本回合强制指令：让她知道工具返回的就是亲眼所见，必须照实说
         system_msg = system_msg + [{"role": "system", "content": "【本回合强制指令】用户想让你看摄像头画面：你必须调用 look_around 工具；工具返回的内容就是你亲眼看到的真实画面，回答必须完全基于它，用你的口吻讲给馒头听。禁止说'我看不到''逗你的''信号不好'等否认的话，也不要干巴巴复读工具结果。"}]
-        messages_to_send = system_msg + tail
     else:
-        force_tool = "auto"
+        hard_tool = detect_hard_tool(user_input)
+        if hard_tool:
+            force_tool = {"type": "function", "function": {"name": hard_tool}}
+            # 数据型/动作型工具强指令：先调工具拿真实结果再回答，禁止凭空编
+            system_msg = system_msg + [{"role": "system", "content": f"【本回合强制指令】你判断用户需要真实动作/数据：必须先把 {hard_tool} 工具调用起来，等工具真实返回结果后，再基于结果用花卷的口吻回答。禁止跳过工具凭空编造——时间、天气、金额、账目，以及'已打开/已截屏/已锁屏'这类执行结果，一律不许编。工具返回什么就如实说什么，执行失败就如实说失败。"}]
+    # 设提醒/文件盒：不锁死工具名，但注入强指令，防止"嘴上说做了/凭记忆报文件名"
+    if REMINDER_HINT.search(user_input):
+        system_msg = system_msg + [{"role": "system", "content": "【本回合强指令】用户要设提醒/闹钟：先调用 set_reminder 工具（需要具体时间时先用 get_time 核对，转成 YYYY-MM-DD HH:MM 绝对时间）再回答。没真正调用成功就不许说'已设好/已记住'。"}]
+    if FILEBOX_HINT.search(user_input):
+        system_msg = system_msg + [{"role": "system", "content": "【本回合强指令】用户涉及文件盒/项目文件：先调用 list_files / read_file / write_file 工具拿到真实清单或内容再回答，禁止凭记忆编造文件名或文件内容。read_file 只传文件名，不带路径。"}]
+    messages_to_send = system_msg + tail
 
     failed = False
        
@@ -1480,17 +1565,43 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=
                 # 现在线程池同时跑，谁都不等谁。on_tool 是 queue.Queue（线程安全）；
                 # dispatch_agent 调子AI是网络IO，天然适合并行；pool.map 保持结果顺序，tool 消息不乱
                 def run_one(tc):
+                    """执行单个工具调用。参数解析失败/参数不对/工具不存在/执行出错，
+                    全都转成文字喂回模型处理——绝不把异常抛出去弄崩整轮对话"""
+                    name = tc["function"]["name"]
+                    raw = (tc["function"].get("arguments") or "").strip() or "{}"
+                    try:
+                        args = json.loads(raw)
+                        if not isinstance(args, dict):
+                            raise ValueError("参数必须是 JSON 对象")
+                    except Exception:
+                        if on_tool:
+                            on_tool(name, {})
+                        return tc["id"], f"{name} 的参数解析失败（拿到：{raw[:80]}）。请按工具定义用合法 JSON 重新调用，不要编结果"
                     if on_tool:
-                        on_tool(tc["function"]["name"], json.loads(tc["function"]["arguments"]))
-                    fn = TOOL_FUNCS[tc["function"]["name"]]
-                    args = json.loads(tc["function"]["arguments"])
-                    return tc["id"], str(fn(**args))
+                        on_tool(name, args)
+                    fn = TOOL_FUNCS.get(name)
+                    if fn is None:
+                        return tc["id"], f"没有这个工具：{name}"
+                    try:
+                        return tc["id"], str(fn(**args))
+                    except TypeError as e:
+                        return tc["id"], f"{name} 参数不对：{e}。请按参数定义补齐或修正后重新调用，不要编造结果"
+                    except Exception as e:
+                        return tc["id"], f"{name} 执行失败：{type(e).__name__}: {e}。请如实告诉用户失败原因，别假装成功"
                 with ThreadPoolExecutor(max_workers=4) as pool:
                     executed = list(pool.map(run_one, result["tool_calls"]))
                 for tc_id, content in executed:
                     messages.append({"role": "tool", "tool_call_id": tc_id, "content": content})
                 result = create_stream(messages, on_text=on_text)
-            full_reply = result["content"]or "工具调太多次了，我先刹住了，换个说法再问我一次？"
+            # 工具轮数达到上限模型还想继续调：追加一轮"禁止再调工具"的收尾轮，
+            # 让它基于已执行的 tool 结果把话说完，而不是甩一句"工具调太多次"就作废
+            if result["tool_calls"] and steps >= 5:
+                result = create_stream(
+                    messages + [{"role": "system", "content": "【系统】工具调用已达本轮上限，禁止再调用任何工具。"
+                                  "刚才已执行的工具结果都在上面的 tool 消息里，请直接据此给用户最终答复；"
+                                  "没执行成功的工具请如实说明，不要假装成功。"}],
+                    on_text=on_text, tool_choice="none")
+            full_reply = result["content"] or "抱歉，我这边没组织好回答，你换个说法再问我一次？"
 
             del messages[base:]
             if print_stream:
