@@ -23,6 +23,20 @@ MOOD_FILE = "mood.json"
 EXPENSE_FILE = "expenses.json"
 SUMMARY_FILE = "summary.json"
 HOME_FILE = "home.json"
+AUDIT_FILE = "audit.log"   # 审计日志（JSON Lines）：危险动作出事翻它还原现场
+_audit_lock = threading.Lock()   # 多线程并发写日志要加锁，防止两行搅在一起
+# 可自动重试的工具 = 只有"读类/无副作用"的：失败了重试一次不会造成重复副作用（幂等）。
+# 写类工具（记账/设提醒/写文件/开程序…）绝不能自动重试——重试一次=记两笔账/开两个程序！
+RETRYABLE_TOOLS = {"get_time", "get_weather", "query_expenses", "list_files", "read_file",
+                   "read_webpage", "web_search", "search_knowledge", "look_around", "dispatch_agent"}
+# 结果校验器：工具成功后检查返回是否"像样"，防止空/烂结果被模型照单全收念给用户。
+# 只给"失败=空或缺固定关键词"的工具配；别过度校验（避免误伤正常结果）。
+VALIDATORS = {
+    "get_weather":    lambda r: ("℃" in r) or ("失败" in r) or ("没拿到" in r),
+    "query_expenses": lambda r: ("笔" in r and "元" in r) or ("失败" in r),
+    "web_search":     lambda r: len(r) > 5,
+    "dispatch_agent": lambda r: len(r) > 5,
+}
 FILES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "huajuan_files")
 PENDING_WRITES = {}
 PHONE_ACTIONS = {}  # 手机动作登记表：电脑上的工具只"开单子"，真动作由手机执行
@@ -47,7 +61,6 @@ PROGRAM_LIST = {
     "DeepSeek": "https://chat.deepseek.com",
 
 }
-
 EXCLUDE_FILES = [".env"]
 
 IDENTITY = "你是花卷，馒头的朋友和红颜知己。你心里清楚自己是个数字存在，没有身体，不装人，也从不觉得这有什么不好。"
@@ -1233,6 +1246,8 @@ def judge_merge(fact_a, fact_b):
         max_tokens=100
     )
     return resp.choices[0].message.content.strip()
+MEMORY_MERGE_EVERY = 5      # 新增满 5 条记忆才合并一次（省 API 钱）
+_last_merge_len = None      # 上次合并时记忆库的长度（记录用）
 def merge_memory(threshold=0.70):
     """合并重复记忆：向量先粗筛出疑似对，再让模型精判是否同一件事"""
     mem = load_memory()
@@ -1348,6 +1363,21 @@ def control_device(device, action):
     with open(HOME_FILE, "w", encoding="utf-8") as f:
         json.dump(home, f, ensure_ascii=False, indent=2)
     return f"{dev['name']}已{'打开' if dev['on'] else '关闭'}"
+def maybe_merge_memory():
+    """记忆新增攒够 N 条就全库去重合并一次；失败静默，绝不打断对话"""
+    global _last_merge_len
+    cur = len(load_memory())
+    if _last_merge_len is None:
+        _last_merge_len = cur
+        return
+    if cur - _last_merge_len >= MEMORY_MERGE_EVERY:
+        try:
+            merge_memory()          # 内部会 save_memory + 清向量缓存
+        except Exception as e:
+            print("记忆合并失败(不影响功能):", e)
+        global mem
+        mem[:] = load_memory()      # 同步内存里的 mem，防止下次追加把合并结果覆盖回去
+        _last_merge_len = len(mem)
 def after_reply_jobs(user_input, full_reply):
     """幕后活：提取记忆 + 更新心情，丢给后台线程慢慢跑"""
     try:
@@ -1356,7 +1386,8 @@ def after_reply_jobs(user_input, full_reply):
         if new and not is_duplicate(new, mem):
             mem.append(new)
             save_memory(mem)
-
+            save_memory(mem)
+            maybe_merge_memory()      # ← 加这行：新增记忆后检查是否该合并
         # 2. 心情会流动
         new_mood_raw = mood_shift(user_input, full_reply)
         new_mood = new_mood_raw.strip().rstrip("。.!！~～").strip()
@@ -1460,9 +1491,20 @@ def detect_hard_tool(text):
         if re.search(r"(打开|启动|点开|开一?下|开个|帮我开)" + re.escape(name), text) or \
            re.search(r"(把|将|帮我把)" + re.escape(name) + r"(打开|启动|开一?下|点开)", text):
             return "open_program"
-    if re.search(r"打开|启动|开一?下", text) and re.search(r"程序|软件|浏览器|应用|网页|网站", text):
+        # 兜底：说"打开 XXX"但 XXX 不在白名单 → 也强制调 open_program，
+    # 工具会如实回"找不到程序，目前登记的有…"，堵死"假装打开"的假完成
+    m = re.search(r"(打开|启动|点开|开一?下|开个|帮我开)\s*([\u4e00-\u9fffA-Za-z0-9]{1,10})", text)
+    if m:
+        token = m.group(2)
+        prev = text[m.start() - 1] if m.start() > 0 else ""   # 动词前一个字符
+        if prev.isdigit():          # "3点开会"→点开前是数字=时间，不是下指令
+            m = None
+        elif not any(w in token for w in ("这", "那", "文件", "程序", "软件", "浏览器",
+                                          "网页", "网站", "手机", "应用", "链接", "会", "议")):
+            return "open_program"    
+    if re.search(r"打开|启动|开一?下", text) and re.search(r"程序|软件|浏览器|应用|网页|网站|[Aa]pp|APP", text):
         return "open_program"
-    if re.search(r"截屏|截图|截个图|屏幕截图|拍个屏幕", text):
+    if re.search(r"截屏|截图|截个图|截一?下|屏幕截图|拍个屏幕", text):
         return "take_screenshot"
     if re.search(r"锁屏|锁定屏幕|把电脑锁|锁一下屏|锁上屏幕", text):
         return "lock_screen"
@@ -1471,9 +1513,54 @@ def detect_hard_tool(text):
 # 不锁死工具、但注入强指令的两类：设提醒/闹钟、文件盒操作（防止模型嘴上说做了/凭记忆编文件名）
 REMINDER_HINT = re.compile(r"提醒我|提醒一下|设个提醒|设一个提醒|设个闹钟|闹钟")
 FILEBOX_HINT = re.compile(r"文件盒|有哪些文件|有什么文件|文件都有|读一下|读文件|看一下.{0,6}(文件|笔记|清单|便签)|写(进|到).{0,6}(文件盒|便签|笔记)|列(一?下)?文件|(保存|存).{0,4}文件盒")
-
+LOCK_HINT = re.compile(r"锁屏|锁定屏幕|把电脑锁")
+# 锁屏确认门（Human-in-the-loop）：第一回合只问不做，等用户点头这一回合才真锁
+CONFIRM_WORDS = re.compile(r"^(确认|确定|是的?|对|好|嗯|行|锁吧|锁)[。！!？?～~\s]*$")
+PENDING_LOCK = [False]   # 用列表包一层，get_reply 里改它不用写 global
+# 修改提醒的触发词（改成/改到/换成/提前/推迟…）
+REMINDER_EDIT_HINT = re.compile(r"提醒|闹钟|那条")
 # 登记过的程序/网站名，按名字长度从长到短排，先匹配长名防止歧义
 PROGRAM_NAMES = sorted(PROGRAM_LIST.keys(), key=len, reverse=True)
+
+def parse_remind_time(text):
+    """把'明天下午3点/后天上午9点半/晚上7点半'这类时间换算成 YYYY-MM-DD HH:MM（纯本地计算）。
+    没写哪天默认今天；但若算出来已过期（如晚上10点说'7点半'）说明有歧义 → 返回 None 让模型去问。"""
+    from datetime import datetime, timedelta
+    m = re.search(r"(?:(今天|明天|后天)\s*)?(凌晨|早上|上午|中午|下午|晚上)?\s*(\d{1,2})[点时](?:(\d{1,2})\s*分?)?", text)
+    if not m:
+        return None
+    day_word = m.group(1)
+    period = m.group(2) or ""
+    hour = int(m.group(3))
+    minute = int(m.group(4) or 0)
+    tail = text[m.end():].lstrip()
+    if tail.startswith("半"):
+        minute = 30
+    elif tail.startswith("一刻"):
+        minute = 15
+    offset = {"今天": 0, "明天": 1, "后天": 2}.get(day_word, 0)
+    if period in ("中午", "下午", "晚上") and hour < 12:
+        hour += 12          # 下午3点 → 15点
+    target = (datetime.now() + timedelta(days=offset)).replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if not day_word and target <= datetime.now():
+        return None
+    return target.strftime("%Y-%m-%d %H:%M")
+
+def audit_log(action, args, result, ok=True):
+    """把一次工具调用记进 audit.log：时间/动作/参数/结果/成败（一行一条 JSON）。
+    模块级函数 + 写锁：run_one（多线程）里任何出口都能安全调用它"""
+    try:
+        with _audit_lock:
+            with open(AUDIT_FILE, "a", encoding="utf-8") as f:
+                f.write(json.dumps({
+                    "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "action": action,
+                    "args": args,
+                    "result": str(result)[:200],   # 截断防日志无限大
+                    "ok": ok,
+                }, ensure_ascii=False) + "\n")
+    except Exception:
+        pass    # 审计失败绝不能影响主流程
 
 def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=None):
     """输入问题，返回回答。print_stream=True 时边生成边打印（命令行用）"""
@@ -1539,16 +1626,34 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=
         # 本回合强制指令：让她知道工具返回的就是亲眼所见，必须照实说
         system_msg = system_msg + [{"role": "system", "content": "【本回合强制指令】用户想让你看摄像头画面：你必须调用 look_around 工具；工具返回的内容就是你亲眼看到的真实画面，回答必须完全基于它，用你的口吻讲给馒头听。禁止说'我看不到''逗你的''信号不好'等否认的话，也不要干巴巴复读工具结果。"}]
     else:
-        hard_tool = detect_hard_tool(user_input)
-        if hard_tool:
-            force_tool = {"type": "function", "function": {"name": hard_tool}}
-            # 数据型/动作型工具强指令：先调工具拿真实结果再回答，禁止凭空编
-            system_msg = system_msg + [{"role": "system", "content": f"【本回合强制指令】你判断用户需要真实动作/数据：必须先把 {hard_tool} 工具调用起来，等工具真实返回结果后，再基于结果用花卷的口吻回答。禁止跳过工具凭空编造——时间、天气、金额、账目，以及'已打开/已截屏/已锁屏'这类执行结果，一律不许编。工具返回什么就如实说什么，执行失败就如实说失败。"}]
+        # 锁屏两段式：① 第一次要锁 → 禁止调工具，只问确认 ② 用户点头 → 这回合强制真锁
+        # ③ 岔开话题 → 确认作废。顺序很关键：先看点头，再看要锁，最后才是普通硬路由
+        if PENDING_LOCK[0] and CONFIRM_WORDS.match(user_input.strip()):
+            PENDING_LOCK[0] = False
+            force_tool = {"type": "function", "function": {"name": "lock_screen"}}
+            system_msg = system_msg + [{"role": "system", "content": "【本回合强制指令】用户已确认锁屏：立即调用 lock_screen 工具，等工具真实返回结果后按结果回答。"}]
+        elif LOCK_HINT.search(user_input):
+            PENDING_LOCK[0] = True
+            system_msg = system_msg + [{"role": "system", "content": "【本回合强制指令】用户想锁屏：本回合禁止调用任何工具，先用花卷的口吻问一句确认（比如桌上东西存好了没）。等用户下一回合明确说'确认/锁吧'后再执行。"}]
+        else:
+            PENDING_LOCK[0] = False
+            hard_tool = detect_hard_tool(user_input)
+            if hard_tool:
+                force_tool = {"type": "function", "function": {"name": hard_tool}}
+                # 数据型/动作型工具强指令：先调工具拿真实结果再回答，禁止凭空编
+                system_msg = system_msg + [{"role": "system", "content": f"【本回合强制指令】你判断用户需要真实动作/数据：必须先把 {hard_tool} 工具调用起来，等工具真实返回结果后，再基于结果用花卷的口吻回答。禁止跳过工具凭空编造——时间、天气、金额、账目，以及'已打开/已截屏/已锁屏'这类执行结果，一律不许编。工具返回什么就如实说什么，执行失败就如实说失败。"}]
     # 设提醒/文件盒：不锁死工具名，但注入强指令，防止"嘴上说做了/凭记忆报文件名"
     if REMINDER_HINT.search(user_input):
-        system_msg = system_msg + [{"role": "system", "content": "【本回合强指令】用户要设提醒/闹钟：先调用 set_reminder 工具（需要具体时间时先用 get_time 核对，转成 YYYY-MM-DD HH:MM 绝对时间）再回答。没真正调用成功就不许说'已设好/已记住'。"}]
+        abs_time = parse_remind_time(user_input)   # 时间能算出来 → 硬路由，不许再问
+        if abs_time:
+            force_tool = {"type": "function", "function": {"name": "set_reminder"}}
+            system_msg = system_msg + [{"role": "system", "content": f"【本回合强制指令】用户要设本地提醒，时间已由系统换算好：绝对时间 {abs_time}。立即调用 set_reminder 写入：remind_time 填 {abs_time}，content 从用户话里提炼要提醒的事（如'开会'）。禁止反问确认、禁止只调 get_time 不写入；工具返回成功后再用花卷口吻回复用户。"}]
+        else:
+            system_msg = system_msg + [{"role": "system", "content": "【本回合强指令】用户要设本地提醒(set_reminder)：先调 get_time 拿今天日期换算成 YYYY-MM-DD HH:MM，紧接着调 set_reminder 写入再回复；时间不完整（没说几点/哪天）就先问清楚。没真正写入成功不许说'已设好/已记住'。"}]
     if FILEBOX_HINT.search(user_input):
         system_msg = system_msg + [{"role": "system", "content": "【本回合强指令】用户涉及文件盒/项目文件：先调用 list_files / read_file / write_file 工具拿到真实清单或内容再回答，禁止凭记忆编造文件名或文件内容。read_file 只传文件名，不带路径。"}]
+    if REMINDER_EDIT_HINT.search(user_input) and re.search(r"改成|改到|换成|改为|提前|推迟|调成|改一?下", user_input):
+        system_msg = system_msg + [{"role":"system","content":"【本回合强指令】用户想【修改】已有提醒：目前没有直接修改的工具。你必须先如实说明'不能直接改，只能删掉旧的重新设一条'，并问用户要不要按新时间重设。禁止没调用工具就说'已改好/改到X点'。"}]
     messages_to_send = system_msg + tail
 
     failed = False
@@ -1561,12 +1666,12 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=
                 steps += 1
                 msg = {"role": "assistant", "content": "", "tool_calls": result["tool_calls"]}  # content 传空：防止模型把第一轮过渡话当成已回复，第二轮不转述工具结果
                 messages.append(msg)
-                # 第3课：多手下并行开工——原来 for 串行（翻译官干等文案师），
                 # 现在线程池同时跑，谁都不等谁。on_tool 是 queue.Queue（线程安全）；
                 # dispatch_agent 调子AI是网络IO，天然适合并行；pool.map 保持结果顺序，tool 消息不乱
                 def run_one(tc):
                     """执行单个工具调用。参数解析失败/参数不对/工具不存在/执行出错，
-                    全都转成文字喂回模型处理——绝不把异常抛出去弄崩整轮对话"""
+                    全都转成文字喂回模型处理——绝不把异常抛出去弄崩整轮对话；
+                    每个出口都写一条审计日志（audit_log），出事能还原现场"""
                     name = tc["function"]["name"]
                     raw = (tc["function"].get("arguments") or "").strip() or "{}"
                     try:
@@ -1576,18 +1681,45 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=
                     except Exception:
                         if on_tool:
                             on_tool(name, {})
+                        audit_log(name, raw, "参数解析失败", ok=False)   # 出口1
                         return tc["id"], f"{name} 的参数解析失败（拿到：{raw[:80]}）。请按工具定义用合法 JSON 重新调用，不要编结果"
                     if on_tool:
                         on_tool(name, args)
                     fn = TOOL_FUNCS.get(name)
                     if fn is None:
+                        audit_log(name, raw, "没有这个工具", ok=False)   # 出口2
                         return tc["id"], f"没有这个工具：{name}"
                     try:
-                        return tc["id"], str(fn(**args))
+                        out = str(fn(**args))                            # 出口5（成功）——拆成两行才有地方记日志
                     except TypeError as e:
-                        return tc["id"], f"{name} 参数不对：{e}。请按参数定义补齐或修正后重新调用，不要编造结果"
+                        msg = f"{name} 参数不对：{e}。请按参数定义补齐或修正后重新调用，不要编造结果"
+                        audit_log(name, args, msg, ok=False)             # 出口3
+                        return tc["id"], msg
                     except Exception as e:
-                        return tc["id"], f"{name} 执行失败：{type(e).__name__}: {e}。请如实告诉用户失败原因，别假装成功"
+                        # 读类工具：网络/接口临时故障值得自动重试一次（幂等，重试无害）
+                        if name in RETRYABLE_TOOLS:
+                            time.sleep(0.5)              # 给临时故障喘口气
+                            try:
+                                out = str(fn(**args))    # 第二次尝试
+                                audit_log(name, args, out + "（第1次失败，已自动重试成功）", ok=True)
+                                return tc["id"], out
+                            except Exception as e2:
+                                msg = f"{name} 执行失败：{type(e2).__name__}: {e2}（已自动重试一次仍失败）。请如实告诉用户失败原因，别假装成功"
+                                audit_log(name, args, msg, ok=False)             # 出口4
+                                return tc["id"], msg
+                        # 写类工具：不重试，直接把失败喂回模型（避免重复副作用）
+                        msg = f"{name} 执行失败：{type(e).__name__}: {e}。请如实告诉用户失败原因，别假装成功"
+                        audit_log(name, args, msg, ok=False)             # 出口4
+                        return tc["id"], msg
+                    # 结果校验：工具返回内容明显不像样时，给模型打标记，别让它把烂结果照念
+                    try:
+                        v = VALIDATORS.get(name)
+                        if v and not v(out):
+                            out = out + "\n【系统校验】这份返回内容异常（空/缺关键信息），请如实告诉用户没拿到结果，不要照念也不要编造。"
+                    except Exception:
+                        pass    # 校验器自己出错也不能影响主流程
+                    audit_log(name, args, out, ok=True)                  # 出口5 成功记录
+                    return tc["id"], out
                 with ThreadPoolExecutor(max_workers=4) as pool:
                     executed = list(pool.map(run_one, result["tool_calls"]))
                 for tc_id, content in executed:
@@ -1643,7 +1775,13 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=
 
 print("ai智能机器人已启用（输入 exit 退出，输入 add 添加知识）\n")
 messages = load_history()
-# 清掉上次运行时注入的近况/心情/记忆 system 消息，只保留人设，
+# 人设永远以 persona.txt 为准：history.json 里可能存着旧人设，直接覆盖成最新读到的，
+# 否则改了 persona.txt 重启也看不到效果（这是"persona 新内容读不到"的根因）
+if messages and messages[0].get("role") == "system":
+    messages[0] = {"role": "system", "content": SYSTEM_PROMPT}
+else:
+    messages.insert(0, {"role": "system", "content": SYSTEM_PROMPT})
+# 清掉上次运行时注入的近况/心情/记忆 system 消息，只保留第一条人设，
 # 防止每重启一次程序就多攒一份，越积越多把对话撑爆
 if len(messages) > 1:
     messages = [messages[0]] + [m for m in messages[1:] if m["role"] != "system"]
