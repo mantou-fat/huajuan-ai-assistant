@@ -68,7 +68,11 @@ rule_cases = [("现在几点了", "get_time"), ("北京天气怎么样", "get_we
               ("把电脑锁了", "lock_screen"), ("别打开微信", None), ("能打开记事本吗", None),
               ("哈哈今天真开心", None),
               ("提醒我明天下午3点开会", None),   # 开会≠开程序(曾经的误伤)
-              ("我下午3点开会", None),]
+              ("我下午3点开会", None),
+              ("把客厅灯打开", "control_device"),
+              ("把灯打开", "control_device"),
+              ("空调关了吗", "control_device"), 
+              ("别开灯", None),]
 bad_rules = [c for c in rule_cases if bot.detect_hard_tool(c[0]) != c[1]]
 t("规则引擎 10 例全对(含防误伤)", not bad_rules, f"错的: {bad_rules}")
 

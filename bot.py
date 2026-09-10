@@ -11,57 +11,20 @@ import base64
 from openai import OpenAI
 import numpy as np
 from bs4 import BeautifulSoup
-
+# 配置搬家：纯配置统一从 config.py 读（重构第一步，只搬位置不改逻辑）
+from config import (REMINDER_FILE, KNOWLEDGE_FILE, HISTORY_FILE, MEMORY_FILE, VEC_CACHE_FILE,
+                    STATUS_FILE, MOOD_FILE, EXPENSE_FILE, SUMMARY_FILE, HOME_FILE, AUDIT_FILE,
+                    RETRYABLE_TOOLS, VALIDATORS, FILES_DIR, READ_DIRS, PROGRAM_LIST,
+                    PROGRAM_NAMES, EXCLUDE_FILES, MAX_MESSAGES, MEMORY_MERGE_EVERY,
+                    KB_STRONG, KB_WEAK)
 from dotenv import load_dotenv
-REMINDER_FILE = "reminders.json"
-KNOWLEDGE_FILE = "knowledge_base.txt"
-HISTORY_FILE = "history.json"
-MEMORY_FILE = "memory.json"
-VEC_CACHE_FILE = "memory_vecs.json"
-STATUS_FILE = "status.json"
-MOOD_FILE = "mood.json"
-EXPENSE_FILE = "expenses.json"
-SUMMARY_FILE = "summary.json"
-HOME_FILE = "home.json"
-AUDIT_FILE = "audit.log"   # 审计日志（JSON Lines）：危险动作出事翻它还原现场
+ # 审计日志（JSON Lines）：危险动作出事翻它还原现场
 _audit_lock = threading.Lock()   # 多线程并发写日志要加锁，防止两行搅在一起
 # 可自动重试的工具 = 只有"读类/无副作用"的：失败了重试一次不会造成重复副作用（幂等）。
 # 写类工具（记账/设提醒/写文件/开程序…）绝不能自动重试——重试一次=记两笔账/开两个程序！
-RETRYABLE_TOOLS = {"get_time", "get_weather", "query_expenses", "list_files", "read_file",
-                   "read_webpage", "web_search", "search_knowledge", "look_around", "dispatch_agent"}
-# 结果校验器：工具成功后检查返回是否"像样"，防止空/烂结果被模型照单全收念给用户。
-# 只给"失败=空或缺固定关键词"的工具配；别过度校验（避免误伤正常结果）。
-VALIDATORS = {
-    "get_weather":    lambda r: ("℃" in r) or ("失败" in r) or ("没拿到" in r),
-    "query_expenses": lambda r: ("笔" in r and "元" in r) or ("失败" in r),
-    "web_search":     lambda r: len(r) > 5,
-    "dispatch_agent": lambda r: len(r) > 5,
-}
-FILES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "huajuan_files")
+
 PENDING_WRITES = {}
 PHONE_ACTIONS = {}  # 手机动作登记表：电脑上的工具只"开单子"，真动作由手机执行
-READ_DIRS = [FILES_DIR, os.path.dirname(FILES_DIR)]
-PROGRAM_LIST = {
-    "微信": r"C:\Program Files\Tencent\Weixin\Weixin.exe",
-    "QQ": r"C:\Program Files\Tencent\QQNT\QQ.exe",
-    "记事本": "notepad.exe",
-    "计算器": "calc.exe",
-    "哔哩哔哩": "https://www.bilibili.com",
-    "抖音": "https://www.douyin.com",
-    "知乎": "https://www.zhihu.com",
-    "微博": "https://weibo.com",
-    "百度": "https://www.baidu.com",
-    "淘宝": "https://www.taobao.com",
-    "京东": "https://www.jd.com",
-    "拼多多": "https://www.pinduoduo.com",
-    "网易云音乐": "https://music.163.com",
-    "腾讯视频": "https://v.qq.com",
-    "优酷": "https://www.youku.com",
-    "GitHub": "https://github.com",
-    "DeepSeek": "https://chat.deepseek.com",
-
-}
-EXCLUDE_FILES = [".env"]
 
 IDENTITY = "你是花卷，馒头的朋友和红颜知己。你心里清楚自己是个数字存在，没有身体，不装人，也从不觉得这有什么不好。"
 
@@ -434,7 +397,7 @@ TOOLS = [
 
 
 
-MAX_MESSAGES = 20
+
 # messages 是全局共享状态，Flask 多线程下可能串话，加把锁
 chat_lock = threading.Lock()
 
@@ -1257,7 +1220,6 @@ def judge_merge(fact_a, fact_b):
         max_tokens=100
     )
     return resp.choices[0].message.content.strip()
-MEMORY_MERGE_EVERY = 5      # 新增满 5 条记忆才合并一次（省 API 钱）
 _last_merge_len = None      # 上次合并时记忆库的长度（记录用）
 def merge_memory(threshold=0.70):
     """合并重复记忆：向量先粗筛出疑似对，再让模型精判是否同一件事"""
@@ -1444,10 +1406,6 @@ TOOL_FUNCS = {
 #   WEAK   = 泛词，可能闲聊也可能真问 → 需要 LLM 复核一次
 # ===== 知识题硬性判断：规则引擎（关键词匹配，确定性，不会看走眼）=====
 # 关键词分两级：STRONG = 术语类命中基本就是查资料→直接注入；WEAK = 泛词可能闲聊→LLM 复核
-KB_STRONG = ["rag", "embedding", "向量", "检索", "召回", "token", "flask", "api",
-             "prompt", "流式", "sse", "函数调用", "工具调用", "agent", "智能体",
-             "temperature", "top_p", "max_tokens", "上下文窗口", "system消息", "few-shot"]
-KB_WEAK = ["什么是", "是什么", "怎么用", "如何", "原理", "区别", "对比"]
 
 def knowledge_hit_level(text):
     """知识题信号强度：'strong'=直接注入；'weak'=要 LLM 复核；None=不是知识题"""
@@ -1552,7 +1510,7 @@ PENDING_LOCK = [False]   # 用列表包一层，get_reply 里改它不用写 glo
 # 修改提醒的触发词（改成/改到/换成/提前/推迟…）
 REMINDER_EDIT_HINT = re.compile(r"提醒|闹钟|那条")
 # 登记过的程序/网站名，按名字长度从长到短排，先匹配长名防止歧义
-PROGRAM_NAMES = sorted(PROGRAM_LIST.keys(), key=len, reverse=True)
+
 
 def parse_remind_time(text):
     """把'明天下午3点/后天上午9点半/晚上7点半'这类时间换算成 YYYY-MM-DD HH:MM（纯本地计算）。
