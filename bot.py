@@ -27,6 +27,9 @@ from llm import client, api_key, tavily_key, bjs_key, workspace_id
 from rag import (split_long_text, load_knowledge, add_knowledge, knowledge_base,
                  get_embedding, get_kb_embeddings, cosine_similarity,
                  top_k_search, search_knowledge)
+# 记忆搬家（重构第四步，行为零变化）
+from memory import (mem, load_memory, save_memory, delete_memory, retrieve_memory,
+                    is_duplicate, judge_merge, merge_memory, maybe_merge_memory)
 # ---- 运行时状态：只在本模块使用，不放 config（配置）也不放 rules（纯规则）----
 _audit_lock = threading.Lock()   # 多线程并发写审计日志要加锁，防止两行搅在一起
 PENDING_WRITES = {}              # 待确认写入（write_file 两步确认用）
@@ -766,38 +769,7 @@ def create_stream(messages, tools=TOOLS,on_text=None,model="qwen-plus", tool_cho
 
 
 
-_mem_embeddings = None  # 记忆向量缓存，记忆变了才重算
-def retrieve_memory(query, k=4, threshold=0.35):
-    """按相似度从记忆里召回最相关的几条，而不是全量塞给模型"""
-    global _mem_embeddings
-    mem = load_memory()
-    if not mem:
-        return []
-    if _mem_embeddings is None:
-        # 先看磁盘缓存：记忆条数没变就直接用，不用重新调接口算向量
-        disk_cache = None
-        try:
-            with open(VEC_CACHE_FILE, "r", encoding="utf-8") as f:
-                disk_cache = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            pass
-        if disk_cache is not None and len(disk_cache) == len(mem):
-            _mem_embeddings = disk_cache
-        else:
-            _mem_embeddings = get_embedding(mem)
-            try:
-                with open(VEC_CACHE_FILE, "w", encoding="utf-8") as f:
-                    json.dump(_mem_embeddings, f)
-            except OSError as e:
-                print("向量缓存写盘失败（不影响功能）：", e)
-    query_vec = get_embedding([query[:2000]])[0]   # 查询串太长会顶爆 embedding 接口，先截前2000字
-    sims = [(i, cosine_similarity(query_vec, v)) for i, v in enumerate(_mem_embeddings)]
-    sims.sort(key=lambda x: x[1], reverse=True)
-    results = []
-    for i, score in sims:
-        if score >= threshold and len(results) < k:
-            results.append(mem[i])
-    return results
+
 
 with open("persona.txt", "r", encoding="utf-8") as f:
     SYSTEM_PROMPT = f.read()
@@ -809,12 +781,7 @@ def load_history():
     except (FileNotFoundError, json.JSONDecodeError):
         return [{"role": "system", "content": SYSTEM_PROMPT}]
 
-def load_memory():
-    try:
-        with open(MEMORY_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return []
+
 
 def load_mood():
     try:
@@ -830,24 +797,9 @@ def save_history(messages):
     with open(HISTORY_FILE, "w", encoding="utf-8") as f:
         json.dump(messages, f, ensure_ascii=False, indent=2)
 
-def save_memory(memory):
-    global _mem_embeddings
-    _mem_embeddings = None  # 记忆变了，向量缓存作废
-    with open(MEMORY_FILE, "w", encoding="utf-8") as f:
-        json.dump(memory, f, ensure_ascii=False, indent=2)
 
-def delete_memory(index):
-    """删除指定索引的记忆。index 先强转整数（接口可能传来 0.5、"0" 这种），转不了就返回 None"""
-    global mem
-    try:
-        index = int(index)
-    except (TypeError, ValueError):
-        return None
-    if 0 <= index < len(mem):
-        removed = mem.pop(index)
-        save_memory(mem)
-        return removed
-    return None
+
+
 
 def load_status():
     try:
@@ -1078,56 +1030,9 @@ def compress_history(dropped_msgs):
     if new:
         save_summary(new, [])
 
-def is_duplicate(new_fact, existing_memories, threshold=0.75):
-    """检查新提取的记忆是否已经存在于现有记忆中"""
-    if not existing_memories:
-        return False
-    all_memories = existing_memories + [new_fact]
-    embeddings = get_embedding(all_memories)
-    new_vec = embeddings[-1]
-    for vec in embeddings[:-1]:
-        if cosine_similarity(new_vec, vec) >= threshold:
-            return True
-    return False
-def judge_merge(fact_a, fact_b):
-    """判断两条记忆是否记录同一件事。是→返回合并后的一句话；否→只返回"否" """
-    prompt = ("下面是两条关于同一用户的长期记忆。请判断它们是否记录了同一件事。\n"
-        "如果是同一件事（信息重叠），把它们合并成一句话，保留两边全部信息，用'馒头'开头。\n"
-        "如果不是同一件事，只回复一个字：否\n\n"
-        f"第一条：{fact_a}\n第二条：{fact_b}"
-    )
-    resp = client.chat.completions.create(
-        model="qwen-plus",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0,
-        max_tokens=100
-    )
+
     return resp.choices[0].message.content.strip()
-_last_merge_len = None      # 上次合并时记忆库的长度（记录用）
-def merge_memory(threshold=0.70):
-    """合并重复记忆：向量先粗筛出疑似对，再让模型精判是否同一件事"""
-    mem = load_memory()
-    if len(mem) < 2:
-        return mem
-    vecs = get_embedding(mem)
-    to_remove = set()
-    for i in range(len(mem)):
-        if i in to_remove:
-            continue
-        for j in range(i + 1, len(mem)):
-            if j in to_remove:
-                continue
-            if cosine_similarity(vecs[i], vecs[j]) < threshold:
-                continue
-            verdict = judge_merge(mem[i], mem[j])
-            if verdict and verdict != "否":
-                mem[i] = verdict
-                to_remove.add(j)
-    if to_remove:
-        result = [m for idx, m in enumerate(mem) if idx not in to_remove]
-        save_memory(result)
-        return result
-    return mem
+
 
 def is_knowledge_question(user_input):
     """判断用户是在闲聊还是在问知识库"""
@@ -1219,21 +1124,7 @@ def control_device(device, action):
     with open(HOME_FILE, "w", encoding="utf-8") as f:
         json.dump(home, f, ensure_ascii=False, indent=2)
     return f"{dev['name']}已{'打开' if dev['on'] else '关闭'}"
-def maybe_merge_memory():
-    """记忆新增攒够 N 条就全库去重合并一次；失败静默，绝不打断对话"""
-    global _last_merge_len
-    cur = len(load_memory())
-    if _last_merge_len is None:
-        _last_merge_len = cur
-        return
-    if cur - _last_merge_len >= MEMORY_MERGE_EVERY:
-        try:
-            merge_memory()          # 内部会 save_memory + 清向量缓存
-        except Exception as e:
-            print("记忆合并失败(不影响功能):", e)
-        global mem
-        mem[:] = load_memory()      # 同步内存里的 mem，防止下次追加把合并结果覆盖回去
-        _last_merge_len = len(mem)
+
 def after_reply_jobs(user_input, full_reply):
     """幕后活：提取记忆 + 更新心情，丢给后台线程慢慢跑"""
     try:
@@ -1550,7 +1441,7 @@ else:
 # 防止每重启一次程序就多攒一份，越积越多把对话撑爆
 if len(messages) > 1:
     messages = [messages[0]] + [m for m in messages[1:] if m["role"] != "system"]
-mem = load_memory()
+
 # 近况/心情刷新放在 import 时会调网络 API——开机自启时网络可能还没就绪，
 # 一旦抛异常整个服务就起不来。包上 try/except：失败就跳过，绝不挡启动
 try:
