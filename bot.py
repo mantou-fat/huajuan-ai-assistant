@@ -853,11 +853,22 @@ def load_knowledge(file_path):
         return [line.strip() for line in f if line.strip()]
 
 def add_knowledge(text):
+    """知识入库：短句直接进；长文自动按句切成 ≤80 字的分块再进（复用 split_long_text），
+    防止一整行 3000 字把检索搞崩"""
     global _kb_embeddings
-    knowledge_base.append(text)
-    _kb_embeddings = None  # 知识库变了，向量缓存作废
-    with open(KNOWLEDGE_FILE, 'a', encoding='utf-8') as f:
-        f.write(text + '\n')
+    text = (text or "").strip()
+    if not text:
+        return 0
+    if len(text) <= 80:              # 本来就是规范条目，直接入库
+        chunks = [text]
+    else:                            # 长文：切成 ≤80 字的块
+        chunks = [c for c in split_long_text(text, 80) if c.strip()]
+    for c in chunks:
+        knowledge_base.append(c)
+        with open(KNOWLEDGE_FILE, "a", encoding="utf-8") as f:
+            f.write(c + "\n")
+    _kb_embeddings = None            # 知识库变了，向量缓存作废
+    return len(chunks)
 
 knowledge_base = load_knowledge(KNOWLEDGE_FILE)
 _kb_embeddings = None  # 知识库向量缓存，避免每次检索都重新算全库向量
@@ -1428,9 +1439,24 @@ TOOL_FUNCS = {
     "control_device": control_device
 }
 # ===== 知识题硬性判断：规则引擎（关键词匹配，确定性，不会看走眼）=====
-KNOWLEDGE_KEYWORDS = ["什么是", "是什么", "怎么用", "如何", "原理", "区别", "对比",
-                      "rag", "embedding", "向量", "检索", "召回", "token", "flask",
-                      "api", "prompt", "流式", "sse", "函数调用", "工具调用", "agent", "智能体"]
+# 知识题关键词分两级：
+#   STRONG = 术语类，命中基本就是查资料 → 直接注入（省一次 LLM）
+#   WEAK   = 泛词，可能闲聊也可能真问 → 需要 LLM 复核一次
+# ===== 知识题硬性判断：规则引擎（关键词匹配，确定性，不会看走眼）=====
+# 关键词分两级：STRONG = 术语类命中基本就是查资料→直接注入；WEAK = 泛词可能闲聊→LLM 复核
+KB_STRONG = ["rag", "embedding", "向量", "检索", "召回", "token", "flask", "api",
+             "prompt", "流式", "sse", "函数调用", "工具调用", "agent", "智能体",
+             "temperature", "top_p", "max_tokens", "上下文窗口", "system消息", "few-shot"]
+KB_WEAK = ["什么是", "是什么", "怎么用", "如何", "原理", "区别", "对比"]
+
+def knowledge_hit_level(text):
+    """知识题信号强度：'strong'=直接注入；'weak'=要 LLM 复核；None=不是知识题"""
+    low = text.lower()
+    if any(k in low for k in KB_STRONG):
+        return "strong"
+    if any(k in low for k in KB_WEAK):
+        return "weak"
+    return None
 
 def looks_like_knowledge(text):
     """规则引擎：像知识题就返回 True"""
@@ -1504,6 +1530,12 @@ def detect_hard_tool(text):
             return "open_program"    
     if re.search(r"打开|启动|开一?下", text) and re.search(r"程序|软件|浏览器|应用|网页|网站|[Aa]pp|APP", text):
         return "open_program"
+    # ---- 智能家居：说"开灯/关空调/灯开着吗"就强制走 control_device（防嘴上说开了实际没动）----
+    if re.search(r"(别|不要|先别|不用)", text) and re.search(r"(灯|空调|风扇|窗帘|电视)", text):
+        return None                       # 否定句（别开灯）不强制
+    if re.search(r"(客厅灯|卧室灯|空调|风扇|窗帘|电视|灯)", text) and \
+       re.search(r"开|关|打开|亮|灭|开着|关着", text):
+        return "control_device"
     if re.search(r"截屏|截图|截个图|截一?下|屏幕截图|拍个屏幕", text):
         return "take_screenshot"
     if re.search(r"锁屏|锁定屏幕|把电脑锁|锁一下屏|锁上屏幕", text):
@@ -1571,10 +1603,27 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=
     with chat_lock:  # 防止多线程并发时 messages 串话
         user_msg = user_input
         # 知识题硬性兜底：命中关键词就强制检索并注入资料，模型没有"不查"的选项
-        if looks_like_knowledge(user_msg):
-            kb = top_k_search(user_msg, k=2)
+                # 知识题两级路由：强词直接注入；弱词让 LLM 复核是不是真查资料（救活 is_knowledge_question）
+        kb_level = knowledge_hit_level(user_msg)
+        if kb_level == "strong":
+            need_kb = True
+        elif kb_level == "weak":
+            try:
+                need_kb = is_knowledge_question(user_msg)
+            except Exception:
+                need_kb = False        # 复核失败宁可不注入，别误伤闲聊
+        else:
+            need_kb = False
+        if need_kb:
+            try:
+                kb = top_k_search(user_msg, k=2)     # 断网/DNS 失败时不能让整轮聊天崩
+            except Exception as e:
+                print("知识库检索失败(跳过注入,不影响聊天):", e)
+                kb = []
             if kb:
-                user_msg += "\n\n【知识库资料】\n" + "\n".join(kb) + "\n（以上是知识库检索到的内容，请基于它回答；如与问题无关可忽略）"
+                labeled = [f"#{knowledge_base.index(t) + 1} {t}" for t in kb]
+                user_msg += "\n\n【知识库资料】\n" + "\n".join(labeled) + \
+                    "\n（引用要求：答案若依据知识库，句末用（知识库#N）标出处，N 用上面出现的编号。示例：system消息用于设定对话角色和规则（知识库#11）。没有依据的内容不许标号、不许编编号。）"
         # 第4课 map-reduce 兜底：超长文本+总结意图 → 自动拆块并行派资料员，把各块摘要注入给主模型合并。
         # 同款思路：模型没有"硬啃长文"的选项——它拿到的已经是手下们嚼碎喂好的料
         mr_note = auto_map_reduce(user_msg)
@@ -1657,13 +1706,15 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=
     messages_to_send = system_msg + tail
 
     failed = False
-       
+    turn_tools = []# 本轮依次调过的工具名（整轮审计用）
+    steps = 0            # ← 新增：轮数计数提前到 try 外面（异常时也有定义）  
     try:
             base = len(messages)
             result = create_stream(messages_to_send, on_text=on_text,model="qwen-vl-max"if image else "qwen-plus", tool_choice=force_tool)
             steps = 0
             while (result["finish_reason"] == "tool_calls" or result["tool_calls"]) and steps < 5:
                 steps += 1
+                turn_tools.extend(tc["function"]["name"] for tc in result["tool_calls"])
                 msg = {"role": "assistant", "content": "", "tool_calls": result["tool_calls"]}  # content 传空：防止模型把第一轮过渡话当成已回复，第二轮不转述工具结果
                 messages.append(msg)
                 # 现在线程池同时跑，谁都不等谁。on_tool 是 queue.Queue（线程安全）；
@@ -1769,7 +1820,9 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=
         compress_history(dropped)
     messages[:] = system_msgs + non_system_msgs[-MAX_MESSAGES:]
     save_history(messages)
-
+    # 整轮审计：这次对话调过哪些工具、几轮、成败（_turn 条目）
+    audit_log("_turn", {"input": user_input[:50], "tools": turn_tools, "rounds": steps},
+              "ok" if not failed else "failed", ok=not failed)
     return full_reply
 
 
@@ -1786,12 +1839,20 @@ else:
 if len(messages) > 1:
     messages = [messages[0]] + [m for m in messages[1:] if m["role"] != "system"]
 mem = load_memory()
-current_status = update_status()
-if current_status:
-    messages.append({"role": "system", "content": "花卷的近况：" + current_status})
-current_mood = update_mood()
-if current_mood:
-    messages.append({"role": "system", "content": "花卷的心情：" + current_mood})
+# 近况/心情刷新放在 import 时会调网络 API——开机自启时网络可能还没就绪，
+# 一旦抛异常整个服务就起不来。包上 try/except：失败就跳过，绝不挡启动
+try:
+    current_status = update_status()
+    if current_status:
+        messages.append({"role": "system", "content": "花卷的近况：" + current_status})
+except Exception as e:
+    print("启动时刷新近况失败(跳过,不影响启动):", e)
+try:
+    current_mood = update_mood()
+    if current_mood:
+        messages.append({"role": "system", "content": "花卷的心情：" + current_mood})
+except Exception as e:
+    print("启动时刷新心情失败(跳过,不影响启动):", e)
 
 
 if __name__ == "__main__":
@@ -1893,7 +1954,7 @@ def tts(text, filename="tts_latest.wav"):
                     continue                       # 格式不一致的段才跳过
                 out_wav.writeframes(w.readframes(w.getnframes()))
 
-
+   
     # 收尾：删掉临时小文件，别把 static 塞满
     for pp in part_paths:
         os.remove(pp)

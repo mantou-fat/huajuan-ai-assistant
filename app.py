@@ -596,6 +596,7 @@ HTML = """
     loadStatus();               // 页面打开时加载近况
     loadHome();                 // 页面打开时加载家里设备状态
     setInterval(loadStatus, 10000); // 10秒后再试一次，防止偶发失败
+    setInterval(loadHome, 10000);   // 设备状态也 10 秒自动刷新：AI 控制的灯/空调不用手动刷新就能看到
 
     async function delMem(i) {
       await fetch('/memory/delete', {

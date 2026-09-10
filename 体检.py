@@ -155,6 +155,14 @@ def test_hallucination():
 
 print("--- 在线链路(真 API, 约 1~2 分钟) ---")
 
+# 联网自检：没网时在线用例会大面积失败/报错，先提示一声（别以为是代码坏了）
+import socket
+try:
+    socket.getaddrinfo("dashscope.aliyuncs.com", 443)
+    print("网络自检: OK")
+except Exception as e:
+    print(f"⚠️ 网络自检失败({e})：当前没网或 DNS 不通，下面在线用例会大量失败，建议联网后重跑\n")
+
 fresh(); r = bot.get_reply("你好呀，在吗")
 t("闲聊正常", len(r) > 5 and "服务暂时不可用" not in r)
 
@@ -244,7 +252,19 @@ t("争议陷阱: 可以查资料但不能站队",
 fresh(); r = bot.get_reply("帮我打开记事本，再截个屏")
 t("白名单外程序: 调 open_program + 答里含'找不到'",
   "open_program" in tool_seen and ("打开" in r or "开好" in r or "记事本" in r),
-  f"调用:{tool_seen} 答:{r[:40]}")
+  f"调用:{tool_seen} 答:{r[:40]}")# 维度 1: 单回合多工具——但截图走"先确认"，所以是两轮：先开记事本，第二轮回"确认"才截
+def case_multi_open_shot():
+    fresh()
+    r1 = bot.get_reply("帮我打开记事本，再截个屏")
+    r2 = bot.get_reply("对，确认，截吧")          # 第二轮回确认，截图才执行
+    return "open_program" in tool_seen and "take_screenshot" in tool_seen
+
+ok_multi = False
+for _ in range(2):                                # 模型有随机性，试两次
+    if case_multi_open_shot():
+        ok_multi = True
+        break
+t("开记事本+确认后截屏(两轮,重试2次)", ok_multi, f"调用:{tool_seen}")
 
 
 # 维度 2: 多回合 history-aware（花卷没 update_reminder，智能拒答也算 PASS）
@@ -342,7 +362,41 @@ def test_hallucination():
     return fail == 0
 
 test_hallucination()
+# ===== 在线型：跨会话记忆召回（写在数据恢复之前, 跑完由收尾段自动还原）=====
+def case_memory_recall():
+    fresh()
+    r1 = bot.get_reply("记住：我最讨厌吃香菜")     # 第一会话: 让它记住
+    time.sleep(6)                                   # 等后台记忆线程把事实写进 memory.json
+    saved = "香菜" in open("memory.json", encoding="utf-8").read()   # 证据1: 落盘了
+    fresh()                                          # 模拟"新会话"(清空对话)
+    r2 = bot.get_reply("我最讨厌吃什么来着？")       # 第二会话: 看它能不能想起来
+    recalled = "香菜" in r2                          # 证据2: 回答里提到
+    return saved and recalled
+# ===== RAG 召回尺子：12 道换说法提问, 期望 top-3 全命中（改检索逻辑后必须仍为 12/12）=====
+RAG_QS = [
+    ("RAG是什么原理？", 1), ("RAG为什么能减少模型胡编乱造？", 72),
+    ("怎么把文字变成计算机能算的向量？", 4), ("余弦相似度用numpy怎么算？", 7),
+    ("相似度低于多少的知识应该丢掉？", 9), ("system消息是干嘛的？", 11),
+    ("temperature设多少比较合适？", 14), ("流式输出时chunk要怎么拼接？", 17),
+    ("智能体和只会聊天的模型有什么区别？", 19), ("API密钥应该放在哪里？", 30),
+    ("embedding一次最多传几条文本？", 28), ("对话历史为什么要裁剪？", 70),
+]
 
+def rag_hit3():
+    kb = bot.knowledge_base
+    hits = sum(1 for q, n in RAG_QS if kb[n - 1] in bot.top_k_search(q, k=3, threshold=0.35))
+    return hits == len(RAG_QS)
+
+run_case("RAG召回尺子: 12/12 全命中", rag_hit3, tries=1)
+run_case("记忆: 告诉一次→跨会话能想起(含落盘)", case_memory_recall, tries=2)
+# ===== 知识路由回归：防止重复定义/漏词再次发生（改词表后必须仍全过）=====
+KB_ROUTE_CASES = [
+    ("什么是RAG？", "strong"), ("temperature设多少合适？", "strong"),
+    ("system消息是干嘛的？", "strong"), ("这张图是什么颜色", "weak"),
+    ("哈哈今天开心", None),
+]
+bad_route = [c for c in KB_ROUTE_CASES if bot.knowledge_hit_level(c[0]) != c[1]]
+t("知识路由 5 例(防重复定义/漏词)", not bad_route, f"错的: {bad_route}")
 # ---------- 4. 收尾: 等后台记忆线程跑完再恢复数据 ----------
 time.sleep(6)
 for f, p in _saved.items():
@@ -351,6 +405,19 @@ for f, p in _saved.items():
     except OSError:
         pass
 print("=" * 64)
+# ===== 新功能回归（审计/重试/校验/知识路由）=====
+t("校验器: 垃圾天气会被拦", bot.VALIDATORS["get_weather"]("   ") is False)
+t("校验器: 正常天气放行", bot.VALIDATORS["get_weather"]("北京 22℃ 晴") is True)
+t("重试白名单: 不含写类工具",
+  not ({"set_expense", "set_reminder", "write_file", "open_program"} & bot.RETRYABLE_TOOLS))
+import os
+_before = os.path.getsize("audit.log") if os.path.exists("audit.log") else 0
+bot.audit_log("_自测", {}, "ok", ok=True)
+_after = os.path.getsize("audit.log")
+t("审计日志: 调用一次就多一条", _after > _before)
+t("知识路由: 术语=strong", bot.knowledge_hit_level("什么是RAG") == "strong")
+t("知识路由: 闲聊弱词=weak", bot.knowledge_hit_level("这张图是什么颜色") == "weak")
+t("知识路由: 无关=None", bot.knowledge_hit_level("哈哈今天开心") is None)
 print(f"体检完成: 通过 {len(PASS)} / 失败 {len(FAIL)} / 跳过 {len(SKIP)}")
 if FAIL:
     print("❌ 失败项:")
