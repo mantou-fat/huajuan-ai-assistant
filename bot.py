@@ -22,7 +22,11 @@ from rules import (clean_aside, looks_like_vision, knowledge_hit_level, detect_h
                    parse_remind_time, REMINDER_HINT, FILEBOX_HINT, LOCK_HINT,
                    CONFIRM_WORDS, REMINDER_EDIT_HINT)
 from dotenv import load_dotenv
-
+# 共享资源与 RAG 搬家（重构第三步，行为零变化）
+from llm import client, api_key, tavily_key, bjs_key, workspace_id
+from rag import (split_long_text, load_knowledge, add_knowledge, knowledge_base,
+                 get_embedding, get_kb_embeddings, cosine_similarity,
+                 top_k_search, search_knowledge)
 # ---- 运行时状态：只在本模块使用，不放 config（配置）也不放 rules（纯规则）----
 _audit_lock = threading.Lock()   # 多线程并发写审计日志要加锁，防止两行搅在一起
 PENDING_WRITES = {}              # 待确认写入（write_file 两步确认用）
@@ -391,19 +395,6 @@ TOOLS = [
 chat_lock = threading.Lock()
 
 
-load_dotenv()
-api_key = os.getenv("DASHSCOPE_API_KEY")
-tavily_key = os.getenv("TAVILY_API_KEY")
-# 唱歌走北京地域专用 key（Fun-Music 只认华北2的 key），没配则退回聊天 key
-bjs_key = os.getenv("BJS_API_KEY") or api_key
-workspace_id = "ws-jyr680etwmdpmwjy"
-if not api_key:
-    print("警告：.env 里没有配置 DASHSCOPE_API_KEY，所有接口调用都会失败")
-client = OpenAI(
-    api_key=api_key or "missing-key",
-    base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"
-)
-
 def get_time():
     from datetime import datetime
     now = datetime.now()
@@ -499,34 +490,7 @@ def dispatch_agent(agent, task):
     return resp.choices[0].message.content.strip() or "子AI没给出结果"
 
 # ============ 第4课 map-reduce：大任务拆给手下分头干 ============
-def split_long_text(text, max_len):
-    """把长文切成每块不超过 max_len 字的列表。切法：先按换行断段，段内再按句末标点断句，
-    句子比 max_len 还长就硬切——保证每块都是完整的语义单元，资料员才读得懂"""
-    units = []                          # 第一步：磨成最小单元（句子）
-    for para in text.split("\n"):
-        para = para.strip()
-        if not para:
-            continue
-        units.extend(re.split(r'(?<=[。！？!?])', para))
-    blocks, cur = [], ""                # 第二步：句子攒成块，够一斗就封斗
-    for u in units:
-        u = u.strip()
-        if not u:
-            continue
-        if len(u) > max_len:            # 碰到超长句，硬切
-            if cur:
-                blocks.append(cur)
-                cur = ""
-            for i in range(0, len(u), max_len):
-                blocks.append(u[i:i + max_len])
-        elif len(cur) + len(u) <= max_len:
-            cur += u
-        else:
-            blocks.append(cur)
-            cur = u
-    if cur:
-        blocks.append(cur)
-    return blocks
+
 
 def map_phase(blocks):
     """map（拆分干活阶段）：每块派一个资料员并行提炼要点，谁都不等谁"""
@@ -800,79 +764,9 @@ def create_stream(messages, tools=TOOLS,on_text=None,model="qwen-plus", tool_cho
     ]
     return {"content": content, "tool_calls": tcs, "finish_reason": finish}
 
-def load_knowledge(file_path):
-    with open(file_path, 'r', encoding='utf-8') as f:
-        return [line.strip() for line in f if line.strip()]
 
-def add_knowledge(text):
-    """知识入库：短句直接进；长文自动按句切成 ≤80 字的分块再进（复用 split_long_text），
-    防止一整行 3000 字把检索搞崩"""
-    global _kb_embeddings
-    text = (text or "").strip()
-    if not text:
-        return 0
-    if len(text) <= 80:              # 本来就是规范条目，直接入库
-        chunks = [text]
-    else:                            # 长文：切成 ≤80 字的块
-        chunks = [c for c in split_long_text(text, 80) if c.strip()]
-    for c in chunks:
-        knowledge_base.append(c)
-        with open(KNOWLEDGE_FILE, "a", encoding="utf-8") as f:
-            f.write(c + "\n")
-    _kb_embeddings = None            # 知识库变了，向量缓存作废
-    return len(chunks)
 
-knowledge_base = load_knowledge(KNOWLEDGE_FILE)
-_kb_embeddings = None  # 知识库向量缓存，避免每次检索都重新算全库向量
 _mem_embeddings = None  # 记忆向量缓存，记忆变了才重算
-
-def get_embedding(texts):
-    """获取文本的向量表示，自动分批（每批最多10条）"""
-    batch_size = 10
-    all_embeddings = []
-    for i in range(0, len(texts), batch_size):
-        batch = texts[i:i + batch_size]
-        response = client.embeddings.create(
-            model="text-embedding-v3",
-            input=batch
-        )
-        all_embeddings.extend([item.embedding for item in response.data])
-    return all_embeddings
-
-def get_kb_embeddings():
-    global _kb_embeddings
-    if _kb_embeddings is None:
-        _kb_embeddings = get_embedding(knowledge_base) if knowledge_base else []
-    return _kb_embeddings
-
-def cosine_similarity(a, b):
-    na, nb = np.linalg.norm(a), np.linalg.norm(b)
-    if na == 0 or nb == 0:
-        return 0.0
-    return np.dot(a, b) / (na * nb)
-
-def top_k_search(query, k=3, threshold=0.35):
-    """相似度低于 threshold 的知识直接丢弃，返回可能为空列表"""
-    if not knowledge_base:
-        return []
-    query_vec = get_embedding([query])[0]
-    kb_vecs = get_kb_embeddings()
-    sims = [(i, cosine_similarity(query_vec, v)) for i, v in enumerate(kb_vecs)]
-    sims.sort(key=lambda x: x[1], reverse=True)
-
-    results = []
-    for i, score in sims:
-        if score >= threshold and len(results) < k:
-            results.append(knowledge_base[i])
-    return results
-
-def search_knowledge(query):
-    """调用工具，查本地知识库"""
-    results = top_k_search(query, k=3, threshold=0.35)
-    if not results:
-        return "知识库里没找到相关内容"
-    return "\n\n".join(results)
-
 def retrieve_memory(query, k=4, threshold=0.35):
     """按相似度从记忆里召回最相关的几条，而不是全量塞给模型"""
     global _mem_embeddings
