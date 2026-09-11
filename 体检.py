@@ -28,6 +28,7 @@ for f in DATA_FILES:
         _saved[f] = shutil.copy2(p, os.path.join(BAK, f))
 
 import bot
+import rag                      # 长文分块/知识入库的离线检查要用（bot 已 import 过，这里只是拿个名字）
 tool_log = []
 for _name, _fn in list(bot.TOOL_FUNCS.items()):
     def _wrap(fn, name):
@@ -316,7 +317,36 @@ except Exception as e:
 
 skip("generate_song 唱歌", "Fun-Music 权限未开通")
 skip("look_around 摄像头", "本机无摄像头/不适合体检时占用")
-skip("auto_map_reduce 长文分块", "慢且烧钱, 建议人工偶尔验证")
+
+# ---------- 长文分块（原来这里是 skip，结果 split_long_text 被空壳覆盖都没人发现）----------
+# 现在改成离线真检查：不花钱、秒出结果，专防"函数被后定义静默覆盖 / 少 import"
+chunks = bot.split_long_text("这是一句测试用的句子。" * 200, 80)      # 2000 字长文
+t("长文分块: 切出多块且每块 ≤80 字(不返回 None)",
+  isinstance(chunks, list) and len(chunks) > 5 and all(len(c) <= 80 for c in chunks),
+  f"块数:{len(chunks) if isinstance(chunks, list) else chunks}"
+  f" 最长:{max((len(c) for c in chunks), default='-') if isinstance(chunks, list) else '-'}")
+
+# 知识入库的长文分支：短句直接进，长文要切成多块进（写临时文件，不碰真知识库）
+import tempfile
+_old_kb_file, _old_len = rag.KNOWLEDGE_FILE, len(rag.knowledge_base)
+_tmp_kb = os.path.join(tempfile.gettempdir(), "kb_long_test.txt")
+rag.KNOWLEDGE_FILE = _tmp_kb
+try:
+    n_chunks = rag.add_knowledge("这是一句很长的知识。" * 30)          # 300 字 → 该切成多块
+    added = rag.knowledge_base[_old_len:]
+    with open(_tmp_kb, encoding="utf-8") as f:
+        n_lines = len([x for x in f if x.strip()])
+    ok = (n_chunks > 1 and n_chunks == n_lines == len(added)
+          and all(len(c) <= 80 for c in added))
+    t("知识入库长文: 自动分块并落盘", ok, f"入库{n_chunks}块 文件{n_lines}行 最长{max((len(c) for c in added), default=0)}字")
+finally:                                    # 无论成败都把现场收拾干净
+    rag.KNOWLEDGE_FILE = _old_kb_file
+    del rag.knowledge_base[_old_len:]
+    rag._kb_embeddings = None
+    try: os.remove(_tmp_kb)
+    except OSError: pass
+
+skip("auto_map_reduce 长文分块端到端", "要真调模型, 慢且烧钱, 分块逻辑已由上面两条离线覆盖")
 
 bot.create_stream = _orig_cs
 def run_case(name, fn, tries=2):

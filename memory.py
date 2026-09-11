@@ -4,6 +4,7 @@
 所以必须留在本文件里（global 才有意义）。"""
 import json
 from config import MEMORY_FILE, VEC_CACHE_FILE, MEMORY_MERGE_EVERY
+from llm import client
 from rag import get_embedding, cosine_similarity
 _mem_embeddings = None  # 记忆向量缓存，记忆变了才重算
 _last_merge_len = None  # 上次合并时记忆库的长度（maybe_merge_memory 用它判断攒够没）

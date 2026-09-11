@@ -2,10 +2,13 @@
 """RAG 知识库：embedding 工具 + 知识入库/分块/检索。
 状态说明：knowledge_base 是列表（共享对象）；_kb_embeddings 会被重新赋值，
 所以它的 global 语句必须留在这个文件里。"""
+import re
 import numpy as np
 
 from config import KNOWLEDGE_FILE
 from llm import client
+
+
 def split_long_text(text, max_len):
     """把长文切成每块不超过 max_len 字的列表。切法：先按换行断段，段内再按句末标点断句，
     句子比 max_len 还长就硬切——保证每块都是完整的语义单元，资料员才读得懂"""
@@ -59,10 +62,7 @@ def add_knowledge(text):
 knowledge_base = load_knowledge(KNOWLEDGE_FILE)
 _kb_embeddings = None  # 知识库向量缓存，避免每次检索都重新算全库向量
 
-def split_long_text(text, max_len):
-    """（从 bot.py 搬来的分块器：map-reduce 和知识入库都用它）"""
-    # ← 这里粘贴你从 bot.py 剪下来的函数体
-    
+
 def get_embedding(texts):
     """获取文本的向量表示，自动分批（每批最多10条）"""
     batch_size = 10
