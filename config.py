@@ -15,6 +15,7 @@ EXPENSE_FILE = "expenses.json"
 SUMMARY_FILE = "summary.json"
 HOME_FILE = "home.json"
 AUDIT_FILE = "audit.log"
+SEEN_FILE = "seen.json"
 
 # ---- 目录与读写范围 ----
 FILES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "huajuan_files")
