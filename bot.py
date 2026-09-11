@@ -47,29 +47,10 @@ from tools import (TOOLS, TOOL_FUNCS, AGENTS, PENDING_WRITES, PHONE_ACTIONS, use
 # ---- 运行时状态：只在本模块使用，不放 config（配置）也不放 rules（纯规则）----
 _audit_lock = threading.Lock()   # 多线程并发写审计日志要加锁，防止两行搅在一起
 PENDING_LOCK = [False]           # 锁屏确认门状态（用列表包一层，改元素不用写 global）
-
-
-
-
-
-
-
-
-
-
-
-
-
 # messages 是全局共享状态，Flask 多线程下可能串话，加把锁
 chat_lock = threading.Lock()
-
-
-
 # 第18个工具：子AI名册（给手下上编制）。每个成员的"专长"= 它的 system 人设
-
 # ============ 第4课 map-reduce：大任务拆给手下分头干 ============
-
-
 def map_phase(blocks):
     """map（拆分干活阶段）：每块派一个资料员并行提炼要点，谁都不等谁"""
     def work(i, block):
@@ -86,7 +67,6 @@ def map_phase(blocks):
     with ThreadPoolExecutor(max_workers=4) as pool:   # 线程池是第3课的地基，直接复用
         results = list(pool.map(work, range(len(blocks)), blocks))
     return "\n".join(r for r in results if r)
-
 def auto_map_reduce(text):
     """第4课入口：长文(≥3000字)+总结意图 且 没点名派手下 → 拆块并行总结，返回注入素材；否则返回空串。
     reduce（合并阶段）交给主模型：它拿到各块摘要，去重整理成对用户的最终回答——老板干合并，手下干拆活。
@@ -105,12 +85,6 @@ def auto_map_reduce(text):
     return ("\n\n【长文分块总结】原文太长，已拆成%d块让资料员们并行整理，各块摘要如下：\n%s\n"
             "（请基于以上分块摘要回答用户的问题：把重复的要点合并，按用户要求的格式输出最终答案，别逐字啃原文）"
             % (len(blocks), digest))
-
-
-
-
-
-    
 def create_stream(messages, tools=TOOLS,on_text=None,model="qwen-plus", tool_choice="auto"):
     stream = client.chat.completions.create(
         model=model,
@@ -150,36 +124,15 @@ def create_stream(messages, tools=TOOLS,on_text=None,model="qwen-plus", tool_cho
         for _, p in sorted(pieces.items())
     ]
     return {"content": content, "tool_calls": tcs, "finish_reason": finish}
-
-
-
-
-
-
 def load_history():
     try:
         with open(HISTORY_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return [{"role": "system", "content": SYSTEM_PROMPT}]
-
-
-
-
 def save_history(messages):
     with open(HISTORY_FILE, "w", encoding="utf-8") as f:
         json.dump(messages, f, ensure_ascii=False, indent=2)
-
-
-
-
-
-
-
-
-
-
-
 def clear_history():
     global messages
     with chat_lock:
@@ -191,10 +144,8 @@ def clear_history():
         n = load_mood()
         if n.get("mood"):
             messages.append({"role": "system", "content": "花卷的心情：" + n["mood"]})
-        
         save_history(messages)
         print("对话历史已清空。")
-
 def extract_memory(user_input, reply):
     """从这段记忆中提取长期记忆的事情，没有就返回空"""
     prompt = ("下面是用户和你的对话。请只提取'关于用户的、值得长期记住的事实'，"
@@ -212,7 +163,6 @@ def extract_memory(user_input, reply):
     if facts and facts != "无":
         return facts
     return ""
-
 def load_summary():
     try:
         with open(SUMMARY_FILE, "r", encoding="utf-8") as f:
@@ -220,11 +170,9 @@ def load_summary():
             return {"summary": data.get("summary", ""), "pending": data.get("pending", [])}
     except (FileNotFoundError, json.JSONDecodeError):
         return {"summary": "", "pending": []}
-
 def save_summary(text, pending):
     with open(SUMMARY_FILE, "w", encoding="utf-8") as f:
         json.dump({"summary": text, "pending": pending, "updated": time.strftime("%Y-%m-%d")}, f, ensure_ascii=False, indent=2)
-
 def compress_history(dropped_msgs):
     """丢掉的旧对话先攒进 pending 待办本，攒够一批才压缩一次"""
     data = load_summary()
@@ -249,11 +197,7 @@ def compress_history(dropped_msgs):
     new = resp.choices[0].message.content.strip()
     if new:
         save_summary(new, [])
-
-
     return resp.choices[0].message.content.strip()
-
-
 def is_knowledge_question(user_input):
     """判断用户是在闲聊还是在问知识库"""
     prompt = (
@@ -270,8 +214,6 @@ def is_knowledge_question(user_input):
     )
     result = resp.choices[0].message.content.strip()
     return "查资料" in result
-
-
 def after_reply_jobs(user_input, full_reply):
     """幕后活：提取记忆 + 更新心情，丢给后台线程慢慢跑"""
     try:
@@ -304,7 +246,6 @@ def after_reply_jobs(user_input, full_reply):
 #   WEAK   = 泛词，可能闲聊也可能真问 → 需要 LLM 复核一次
 # ===== 知识题硬性判断：规则引擎（关键词匹配，确定性，不会看走眼）=====
 # 关键词分两级：STRONG = 术语类命中基本就是查资料→直接注入；WEAK = 泛词可能闲聊→LLM 复核
-
 def audit_log(action, args, result, ok=True):
     """把一次工具调用记进 audit.log：时间/动作/参数/结果/成败（一行一条 JSON）。
     模块级函数 + 写锁：run_one（多线程）里任何出口都能安全调用它"""
@@ -320,13 +261,11 @@ def audit_log(action, args, result, ok=True):
                 }, ensure_ascii=False) + "\n")
     except Exception:
         pass    # 审计失败绝不能影响主流程
-
 def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=None):
     """输入问题，返回回答。print_stream=True 时边生成边打印（命令行用）"""
     # 防御：接口传进来的不一定是字符串
     user_input = str(user_input) if user_input is not None else ""
     PHONE_ACTIONS.clear()  # 每轮开头清空登记，防止上一轮的"单子"残留被下轮带走
-
     with chat_lock:  # 防止多线程并发时 messages 串话
         user_msg = user_input
         # 知识题硬性兜底：命中关键词就强制检索并注入资料，模型没有"不查"的选项
@@ -357,18 +296,14 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=
         map_reduce_triggered = bool(mr_note)   # 新增：记录本轮是否走了 map-reduce
         if mr_note:
             user_msg += mr_note
-
     if image:
         messages.append({"role": "user", "content": "[图片] " + user_msg})
     else:
         messages.append({"role": "user", "content": user_msg})
-
-
     system_msg = [m for m in messages if m["role"] == "system"]
     summary = load_summary()
     if summary.get("summary"):
             system_msg = system_msg + [{"role": "system", "content": "更早对话的摘要：\n" + summary["summary"]}]
-
     non_system = [m for m in messages if m["role"] != "system"]
                 # RAG 记忆召回：每轮按当前问题现场检索，只带相关的，用完即扔不进 history
     # 召回失败（如接口临时出错）不能弄崩整轮聊天：降级成"没召回"继续聊
@@ -383,10 +318,8 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=
     # map-reduce 兜底：模型嘴硬/格式跑偏时，用 system 强制拉回来
     if map_reduce_triggered:
         system_msg = system_msg + [{"role": "system", "content": "【本轮回合强制指令】文章已触发 map-reduce：资料员已将长文分块并返回【第N块】摘要。你的任务：①将上述分块摘要整理成结构化的要点列表（用序号 1. 2. 3. 或 - 项目符号输出），禁止写成读后感或情绪回应；②若用户询问处理方式，必须如实回答'文章较长，我切成了N块让资料员分头总结，再合并给你'；③禁止编造'自己一页页读''没分块''没派手下'等说法。"}]
-
     if re.search(r'(派|找|叫|请|让)(翻译官|文案师|资料员|代码员|个AI|手下)', user_input):
         system_msg = system_msg + [{"role": "system", "content": "【本轮回合强制指令】馒头点名要派手下：你必须调用 dispatch_agent 工具，从名册里挑对的人（翻译官/文案师/资料员/代码员）。一次派多个手下时，必须为每个手下各发一次 dispatch_agent 调用，一个都不许漏。等所有子AI结果都回来后，按顺序逐条贴出每个结果的内容本体（译文念译文、文案贴文案、要点逐条列），每条前加【翻译官】【文案师】这类标签；有几个结果就贴几条，禁止漏贴、禁止只点评不转述、禁止说'都转给你了/收着啦'却没贴内容。禁止自己代劳翻译/写作/总结。"}]
-        
     tail = non_system[-MAX_MESSAGES:]
     if image:
         tail[-1] = {"role": "user", "content": [
@@ -394,7 +327,6 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=
             {"type": "image_url", "image_url": {"url": image}}
         ]}
     messages_to_send = system_msg + tail
-
     vision_hit = looks_like_vision(user_input)
     force_tool = "auto"
     if vision_hit:
@@ -431,7 +363,6 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=
     if REMINDER_EDIT_HINT.search(user_input) and re.search(r"改成|改到|换成|改为|提前|推迟|调成|改一?下", user_input):
         system_msg = system_msg + [{"role":"system","content":"【本回合强指令】用户想【修改】已有提醒：目前没有直接修改的工具。你必须先如实说明'不能直接改，只能删掉旧的重新设一条'，并问用户要不要按新时间重设。禁止没调用工具就说'已改好/改到X点'。"}]
     messages_to_send = system_msg + tail
-
     failed = False
     turn_tools = []# 本轮依次调过的工具名（整轮审计用）
     steps = 0            # ← 新增：轮数计数提前到 try 外面（异常时也有定义）  
@@ -512,7 +443,6 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=
                                   "没执行成功的工具请如实说明，不要假装成功。"}],
                     on_text=on_text, tool_choice="none")
             full_reply = result["content"] or "抱歉，我这边没组织好回答，你换个说法再问我一次？"
-
             del messages[base:]
             if print_stream:
                 print("AI:", full_reply)
@@ -520,16 +450,11 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=
             print(f"请求失败：{e}")
             full_reply = "抱歉，服务暂时不可用，请稍后再试"
             failed = True
-
-        
         # 保险丝：把模型漏网的括号旁白删掉（规则和直播出口共用 clean_aside）
     full_reply = clean_aside(full_reply)
-
         # 删掉旁白后可能留下行首行尾多余空格和空行
     full_reply = "\n".join(line.strip() for line in full_reply.split("\n") if line.strip())
-
     messages.append({"role": "assistant", "content": full_reply})
-
         # 请求失败时不再白跑记忆/心情两次 API，直接存盘返回
     if not failed:
             threading.Thread(
@@ -537,8 +462,6 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=
                 args=(user_input, full_reply),
                 daemon=True
             ).start()
-
-
         # 存盘前截断：只保留 system 消息 + 最近 MAX_MESSAGES 条对话，防止 history.json 无限膨胀
     system_msgs = [m for m in messages if m["role"] == "system"]
     non_system_msgs = [m for m in messages if m["role"] != "system"]
@@ -551,8 +474,6 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=
     audit_log("_turn", {"input": user_input[:50], "tools": turn_tools, "rounds": steps},
               "ok" if not failed else "failed", ok=not failed)
     return full_reply
-
-
 print("ai智能机器人已启用（输入 exit 退出，输入 add 添加知识）\n")
 messages = load_history()
 # 人设永远以 persona.txt 为准：history.json 里可能存着旧人设，直接覆盖成最新读到的，
@@ -565,7 +486,6 @@ else:
 # 防止每重启一次程序就多攒一份，越积越多把对话撑爆
 if len(messages) > 1:
     messages = [messages[0]] + [m for m in messages[1:] if m["role"] != "system"]
-
 # 近况/心情刷新放在 import 时会调网络 API——开机自启时网络可能还没就绪，
 # 一旦抛异常整个服务就起不来。包上 try/except：失败就跳过，绝不挡启动
 try:
@@ -580,8 +500,6 @@ try:
         messages.append({"role": "system", "content": "花卷的心情：" + current_mood})
 except Exception as e:
     print("启动时刷新心情失败(跳过,不影响启动):", e)
-
-
 if __name__ == "__main__":
     while True:
         user_input = input('你：')
@@ -595,4 +513,3 @@ if __name__ == "__main__":
             print("已添加到知识库！")
             continue
         get_reply(user_input, print_stream=True)
-

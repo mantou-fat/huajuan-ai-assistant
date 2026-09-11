@@ -4,11 +4,8 @@
 所以它的 global 语句必须留在这个文件里。"""
 import re
 import numpy as np
-
 from config import KNOWLEDGE_FILE
 from llm import client
-
-
 def split_long_text(text, max_len):
     """把长文切成每块不超过 max_len 字的列表。切法：先按换行断段，段内再按句末标点断句，
     句子比 max_len 还长就硬切——保证每块都是完整的语义单元，资料员才读得懂"""
@@ -40,7 +37,6 @@ def split_long_text(text, max_len):
 def load_knowledge(file_path):
     with open(file_path, 'r', encoding='utf-8') as f:
         return [line.strip() for line in f if line.strip()]
-
 def add_knowledge(text):
     """知识入库：短句直接进；长文自动按句切成 ≤80 字的分块再进（复用 split_long_text），
     防止一整行 3000 字把检索搞崩"""
@@ -58,11 +54,8 @@ def add_knowledge(text):
             f.write(c + "\n")
     _kb_embeddings = None            # 知识库变了，向量缓存作废
     return len(chunks)
-
 knowledge_base = load_knowledge(KNOWLEDGE_FILE)
 _kb_embeddings = None  # 知识库向量缓存，避免每次检索都重新算全库向量
-
-
 def get_embedding(texts):
     """获取文本的向量表示，自动分批（每批最多10条）"""
     batch_size = 10
@@ -75,19 +68,16 @@ def get_embedding(texts):
         )
         all_embeddings.extend([item.embedding for item in response.data])
     return all_embeddings
-
 def get_kb_embeddings():
     global _kb_embeddings
     if _kb_embeddings is None:
         _kb_embeddings = get_embedding(knowledge_base) if knowledge_base else []
     return _kb_embeddings
-
 def cosine_similarity(a, b):
     na, nb = np.linalg.norm(a), np.linalg.norm(b)
     if na == 0 or nb == 0:
         return 0.0
     return np.dot(a, b) / (na * nb)
-
 def top_k_search(query, k=3, threshold=0.35):
     """相似度低于 threshold 的知识直接丢弃，返回可能为空列表"""
     if not knowledge_base:
@@ -96,13 +86,11 @@ def top_k_search(query, k=3, threshold=0.35):
     kb_vecs = get_kb_embeddings()
     sims = [(i, cosine_similarity(query_vec, v)) for i, v in enumerate(kb_vecs)]
     sims.sort(key=lambda x: x[1], reverse=True)
-
     results = []
     for i, score in sims:
         if score >= threshold and len(results) < k:
             results.append(knowledge_base[i])
     return results
-
 def search_knowledge(query):
     """调用工具，查本地知识库"""
     results = top_k_search(query, k=3, threshold=0.35)

@@ -126,6 +126,5 @@ def maybe_merge_memory():
         global mem
         mem[:] = load_memory()      # 同步内存里的 mem，防止下次追加把合并结果覆盖回去
         _last_merge_len = len(mem)
-
 # 模块级状态：全体共享同一个列表对象（bot 里 mem.append(...) 也改的是这一份）
 mem = load_memory()

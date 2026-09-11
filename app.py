@@ -1,19 +1,14 @@
-
 from flask import Flask, request, jsonify, send_file, Response, json, redirect
 from html import escape as html_escape   # 转义文本，防 XSS
-
 from bot import get_reply, clear_history, load_memory, load_status, get_greeting, delete_memory, load_mood,tts,user_location,check_reminders,expense_summary,PHONE_ACTIONS,control_device
 import queue
 import threading
 import os
 import hmac
-
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024   # 请求体上限 10MB：挡住超大请求打爆内存/API
-
 # ============ 访问保护：在 .env 里配好 ACCESS_TOKEN 后，谁都要带钥匙才能进 ============
 ACCESS_TOKEN = os.getenv("ACCESS_TOKEN", "")   # 没配 = 门不锁（会打警告）；配了 = 全站上锁
-
 def _authed():
     """三种带钥匙方式：①登录后的 cookie；②请求头 X-Token；③网址尾巴 ?token=xxx"""
     if not ACCESS_TOKEN:
@@ -22,7 +17,6 @@ def _authed():
     if not got:
         return False
     return hmac.compare_digest(str(got), ACCESS_TOKEN)   # 恒定时间比较，防猜钥匙
-
 @app.before_request
 def guard():
     """门卫：登录页和静态文件放行，其余没钥匙的一律挡下"""
@@ -35,7 +29,6 @@ def guard():
     if request.accept_mimetypes.accept_html:   # 浏览器直接开页面 → 送去登录页
         return redirect("/login")
     return jsonify({"error": "未授权：请在 .env 配置 ACCESS_TOKEN，访问时带 X-Token 头或 ?token= 参数"}), 401
-
 LOGIN_PAGE = """<!DOCTYPE html><html lang="zh"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0"><title>花卷 · 进门</title>
 <style>body{font-family:sans-serif;background:#f0f4f0;display:flex;justify-content:center;align-items:center;height:100vh;margin:0}
@@ -46,7 +39,6 @@ button{width:100%;padding:10px;background:#4CAF50;color:#fff;border:none;border-
 <p style="color:#888;font-size:13px">输入访问钥匙（ACCESS_TOKEN）进门</p>
 <form method="post"><input type="password" name="token" placeholder="访问钥匙" autofocus>
 <button type="submit">进门</button></form>__MSG__</div></body></html>"""
-
 @app.route("/login", methods=["GET", "POST"])
 def login():
     """登录页：钥匙对了就种 cookie（HttpOnly），之后一个月免登录"""
@@ -62,8 +54,6 @@ def login():
         else:
             msg = "<p style='color:#c33;font-size:13px'>钥匙不对，再试试</p>"
     return LOGIN_PAGE.replace("__MSG__", msg), (401 if request.method == "POST" and msg else 200)
-
-
 HTML = """
 <!DOCTYPE html>
 <html lang="zh">
@@ -660,7 +650,6 @@ HTML = """
 </body>
 </html>
 """
-
 @app.route("/")
 def index():
     # 直接在服务器端把近况写进页面（不靠JS加载），刷新页面必然显示
@@ -673,7 +662,6 @@ def index():
     page = page.replace("__MOOD__", "<span>花卷的心情：</span>" + html_escape(mood))
     # no-store: 告诉浏览器别缓存这个页面，每次都拿最新的
     return page, 200, {"Cache-Control": "no-store"}
-
 @app.route("/location", methods=["POST"])
 def receive_location():
     data = request.get_json()
@@ -686,37 +674,30 @@ def chat_api():
     data = request.get_json()
     reply = get_reply(data.get("message", ""))
     return jsonify({"reply": reply, "action": PHONE_ACTIONS or None})
-
 @app.route("/clear", methods=["POST"])
 def clear_api():
     clear_history()
     return jsonify({"ok": True})
-
 @app.route("/bg.jpg")
 def bg():
     return send_file("bg.jpg")
-
 @app.route("/status")
 def status_api():
     data = load_status()
     data["expense"] = expense_summary()
     data["reminders"] = check_reminders()
     return jsonify(data)
-
 @app.route("/mood")
 def mood_api():
     return jsonify(load_mood())
-
 @app.route("/memory")
 def memory_api():
     return jsonify(load_memory())
-
 @app.route("/memory/delete", methods=["POST"])
 def memory_delete_api():
     data = request.get_json()
     delete_memory(data.get("index", -1))
     return jsonify({"ok": True})
-
 @app.route("/greet")
 def greet_api():
     return jsonify({"greeting": get_greeting()})
@@ -735,23 +716,19 @@ def tts_api():
 def home_api():
     with open("home.json", "r", encoding="utf-8") as f:
         return jsonify(json.load(f))
-
 @app.route("/home/control", methods=["POST"])
 def home_control_api():
     data = request.get_json()
     result = control_device(data.get("device", ""), data.get("action", ""))
     with open("home.json", "r", encoding="utf-8") as f:
         return jsonify({"result": result, "home": json.load(f)})
-    
 @app.route("/chat_stream", methods=["POST"])
 def chat_stream_api():
     data = request.get_json()
     msg = data.get("message", "")
     img = data.get("image")
-
     def generate():
         q = queue.Queue()
-
         def push(text):
             q.put(text)                      # 碎片扔上传送带
         def tool_push(name,args):
@@ -763,9 +740,7 @@ def chat_stream_api():
             finally:
                 q.put(("final", reply))          # 定稿全文（已洗过旁白）
                 q.put(None)                      # 哨兵：干完活的信号
-
         threading.Thread(target=worker).start()
-
         while True:
             piece = q.get()                  # 阻塞等，来一个发一个
             if piece is None:                # 收到哨兵
@@ -778,11 +753,9 @@ def chat_stream_api():
                 yield "data: " + json.dumps({"tool": piece[1]}) + "\n\n"
                 continue
             yield "data: " + json.dumps({"delta": piece}, ensure_ascii=False) + "\n\n"
-
     return Response(generate(), mimetype="text/event-stream")    
 if __name__ == "__main__":
     # 0.0.0.0 = 监听所有网卡：同一 WiFi 下手机也能通过电脑的局域网 IP 访问
     # debug=False：不向访客泄露报错详情（安全）；threaded=True：多线程处理，一条 SSE 长聊天不再冻住其他请求
     app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
     # 想带调试日志跑开发版（仅本机调试用）：python app.py 前把上面换成 debug=True、host=127.0.0.1
-

@@ -9,12 +9,10 @@ import hashlib
 import requests
 from concurrent.futures import ThreadPoolExecutor
 from bs4 import BeautifulSoup
-
 from config import (REMINDER_FILE, EXPENSE_FILE, HOME_FILE, FILES_DIR, READ_DIRS,
                     EXCLUDE_FILES, PROGRAM_LIST)
 from llm import client, api_key, tavily_key, bjs_key, workspace_id
 from rag import search_knowledge, get_embedding, cosine_similarity
-
 PENDING_WRITES = {}              # 待确认写入（write_file 两步确认用）
 PHONE_ACTIONS = {}               # 手机动作登记表：电脑上的工具只"开单子"，真动作由手机执行
 def load_expenses():
@@ -23,11 +21,9 @@ def load_expenses():
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return []
-
 def save_expenses(items):
     with open(EXPENSE_FILE, "w", encoding="utf-8") as f:
         json.dump(items, f, ensure_ascii=False, indent=2)
-
 def query_expenses(month=None):
     items = load_expenses()
     if month:
@@ -35,12 +31,10 @@ def query_expenses(month=None):
     total = sum(x["amount"] for x in items)
     lines = [f"{x['date']} {x['item']} {x['amount']}元" for x in items]
     return f"共{len(items)}笔，总支出{total}元：\n" + "\n".join(lines)
-
 def expense_summary():
     month = time.strftime("%Y-%m")
     items = [x for x in load_expenses() if x["date"].startswith(month)]
     return {"month": month, "count": len(items), "total": sum(x["amount"] for x in items)}
-
 def check_reminders():
     """找出所有到点的提醒，从文件里删掉，返回它们"""
     items = load_reminders()
@@ -360,7 +354,6 @@ TOOLS = [
         }
     }
 },
-
 ]
 def get_time():
     from datetime import datetime
@@ -387,7 +380,6 @@ def load_reminders():
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return []
-
 def save_reminders(items):
     with open(REMINDER_FILE, "w", encoding="utf-8") as f:
         json.dump(items, f, ensure_ascii=False, indent=2)
@@ -438,7 +430,6 @@ AGENTS = {
     "资料员": "你是资料员，负责把长资料整理清楚。输出结构清晰的要点或摘要，直接给结果。",
     "代码员": "你是代码员，负责写代码。直接给能跑的完整代码，需要时配一句简短说明，不要客套。",
 }
-
 def dispatch_agent(agent, task):
     """第18个工具：从名册挑一个子AI干活。子AI不带人设、不带记忆、只带一张任务单"""
     if agent not in AGENTS:
@@ -470,7 +461,6 @@ def generate_song(theme):
         lyrics = lyric_resp.choices[0].message.content.strip()
         if not lyrics:
             return "歌词没写成，再说一次试试？"
-
         # 第2步：调 Fun-Music 生成歌曲（prompt 和 lyrics 同传只认 lyrics，所以只传歌词）
         r = requests.post(
             "https://" + workspace_id + ".cn-beijing.maas.aliyuncs.com/api/v1/services/audio/music/generation",
@@ -483,7 +473,6 @@ def generate_song(theme):
         )
         data = r.json()
         audio_url = data["output"]["audio"]["url"]
-
         # 第3步：下载到本地（线上链接24小时就失效，必须存下来）
         song_resp = requests.get(audio_url, timeout=120)
         filename = "song_" + hashlib.md5(theme.encode()).hexdigest()[:8] + ".mp3"
@@ -492,7 +481,6 @@ def generate_song(theme):
         return "唱好了！播放地址：/static/" + filename
     except Exception as e:
         return "唱歌失败：" + str(e)
-   
 def read_webpage_browser(url):
     try:
         from playwright.sync_api import sync_playwright
@@ -523,7 +511,6 @@ def safe_read_path(filename):
         if path.startswith(d + os.sep) and os.path.exists(path):
             return path
     return None
-
 def safe_write_path(filename):
     """写权限：只认文件盒，一个字都不许出去"""
     path = os.path.abspath(os.path.join(FILES_DIR, filename))
@@ -542,8 +529,6 @@ def list_files():
         return "\n".join(lines)
     except Exception as e:
         return "列文件失败：" + str(e)
-
-
 def read_file(filename):
     path = safe_read_path(filename)
     if path is None:
@@ -588,25 +573,21 @@ def set_reminder(remind_time, content):
         return f"已记住：{remind_time} 提醒你 {content}"
     except Exception as e:
         return f"设提醒失败：{e}"
-    
 def set_timer(minutes):
     """手机倒计时工具：只登记，不真的计时"""
     PHONE_ACTIONS["action"] = "set_timer"
     PHONE_ACTIONS["minutes"] = int(minutes)
     return f"手机倒计时已登记：{minutes} 分钟。请如实转告用户：手机会在 {minutes} 分钟后响铃，等他同意后再执行。"
-
 def open_app(app_name):
     """打开手机应用工具：只登记，不真的打开"""
     PHONE_ACTIONS["action"] = "open_app"
     PHONE_ACTIONS["app"] = app_name
     return f"打开应用已登记：{app_name}。请如实转告用户：将为他打开 {app_name}，等他同意后再执行。"
-
 def create_reminder(text):
     """手机提醒事项工具：只登记，不真的写入"""
     PHONE_ACTIONS["action"] = "create_reminder"
     PHONE_ACTIONS["text"] = text
     return f"提醒事项已登记：{text}。请如实转告用户：提醒已准备好，等他同意后再加到手机里。"
-
 def open_program(program_name):
     """打开程序/网站。安全靠两层：①ACCESS_TOKEN 门（外人进不来）②人设要求先问用户再调本工具。
     注：曾试过加 confirm 参数做代码级确认，但模型常漏传导致'用户已同意却仍被拦'，故去掉（2026-09-05）"""
@@ -615,7 +596,6 @@ def open_program(program_name):
         return f"找不到程序「{program_name}」，目前登记的有：{'、'.join(PROGRAM_LIST.keys())}"
     os.startfile(path)
     return f"已在电脑上打开 {program_name}。"
-
 def take_screenshot():
     """截屏保存。安全同上：ACCESS_TOKEN 门 + 人设先确认。2026-09-05 去掉 confirm 参数"""
     from PIL import ImageGrab
@@ -627,14 +607,11 @@ def take_screenshot():
     img = ImageGrab.grab()
     img.save(path)
     return f"已截屏，文件名 {filename}，存在 {path}"
-
-
 def lock_screen():
     """锁屏。安全同上：ACCESS_TOKEN 门 + 人设先确认。2026-09-05 去掉 confirm 参数"""
     import ctypes
     ctypes.windll.user32.LockWorkStation()
     return "已锁屏。"
-
 def set_expense(item, amount):
     try:
         date = time.strftime("%Y-%m-%d")
@@ -645,7 +622,6 @@ def set_expense(item, amount):
     except Exception as e:
         return f"记账失败：{e}"
 _yolo_model = None   # 全局缓存：模型只加载一次
-
 def look_around():
     global _yolo_model
     if _yolo_model is None:
@@ -657,7 +633,6 @@ def look_around():
     cap.release()
     if not ok:
         return "摄像头打开失败，可能被别的程序占用了"
-
     # ---- 第一双眼睛：YOLO 哨兵报点 ----
     r = _yolo_model.predict(frame, verbose=False, imgsz=320)[0]
     counts = {}
@@ -668,7 +643,6 @@ def look_around():
         yolo_report = "、".join(f"{n} {c}个" if c > 1 else n for n, c in counts.items())
     else:
         yolo_report = "没认出明确的物体"
-
     # ---- 第二双眼睛：qwen-vl 顾问细看 ----          
     ok2, buf = cv2.imencode(".jpg", frame)             
     if ok2:                                           
@@ -688,7 +662,6 @@ def look_around():
             vl_report = "细看环节失败了"                
     else:
         vl_report = "照片打包失败"
-
     # ---- 合并汇报（开头黑体字是写给模型看的：这是真实画面，必须照实转述） ----
     return ("【系统：以下是你通过摄像头亲眼看到的真实画面，回答必须完全基于这两条内容，"
             "禁止说'我看不到''看不清''信号不好'等否认的话】\n"
@@ -746,13 +719,11 @@ def tts(text, filename="tts_latest.wav"):
     import urllib.error
     import json as _json
     import wave
-
     # 缓存：用文字的 MD5 当文件名，同一段文字只合成一次
     filename = hashlib.md5(text.encode("utf-8")).hexdigest()[:16] + ".wav"
     save_path = os.path.join("static", filename)
     if os.path.exists(save_path) and os.path.getsize(save_path) > 0:
         return "/static/" + filename   # 已有现成音频，秒回
-
     # ---------- 第1步：切段 ----------
     # 思路和第4课 split_long_text 一样：优先按句子切，切不出就攒
     def split_sentences(long_text, max_len=300):
@@ -776,7 +747,6 @@ def tts(text, filename="tts_latest.wav"):
             if p.strip():
                 final.append(p)
         return final
-
     # ---------- 第2步：单段合成（就是原来 tts 的主体，text 换成 piece） ----------
     def synth_one(piece, i):
         url = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
@@ -800,7 +770,6 @@ def tts(text, filename="tts_latest.wav"):
         part_path = os.path.join("static", "tts_part_" + str(i) + ".wav")
         urllib.request.urlretrieve(audio_url, part_path)
         return part_path
-
         # ---------- 第3步：并行合成（照第3课 run_one 描红） ----------
     parts = split_sentences(text)
     def synth_job(pair):              # pair 是 (段号, 段文字) 的打包件
@@ -808,8 +777,6 @@ def tts(text, filename="tts_latest.wav"):
         return synth_one(piece, i)
     with ThreadPoolExecutor(max_workers=4) as pool:
         part_paths = list(pool.map(synth_job, enumerate(parts)))
-
-
     # ---------- 第4步：wave 拼接 ----------
     with wave.open(save_path, "wb") as out_wav:
         first_params = None
@@ -824,10 +791,7 @@ def tts(text, filename="tts_latest.wav"):
                 elif fmt != first_params:
                     continue                       # 格式不一致的段才跳过
                 out_wav.writeframes(w.readframes(w.getnframes()))
-
-   
     # 收尾：删掉临时小文件，别把 static 塞满
     for pp in part_paths:
         os.remove(pp)
-
     return "/static/" + filename

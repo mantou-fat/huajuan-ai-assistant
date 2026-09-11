@@ -3,7 +3,6 @@
 import os
 from dotenv import load_dotenv
 from openai import OpenAI
-
 load_dotenv()
 api_key = os.getenv("DASHSCOPE_API_KEY")
 tavily_key = os.getenv("TAVILY_API_KEY")

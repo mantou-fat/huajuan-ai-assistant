@@ -3,10 +3,8 @@
 注意：SYSTEM_PROMPT 在 import 时从 persona.txt 读一次，改完人设文件要重启服务才生效。"""
 import json
 import time
-
 from config import STATUS_FILE, MOOD_FILE, SEEN_FILE
 from llm import client
-
 with open("persona.txt", "r", encoding="utf-8") as f:
     SYSTEM_PROMPT = f.read()
 IDENTITY = "你是花卷，馒头的朋友和红颜知己。你心里清楚自己是个数字存在，没有身体，不装人，也从不觉得这有什么不好。"
@@ -25,7 +23,6 @@ def load_status():
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return {"status": "", "updated": ""}
-
 def save_status(data):
     with open(STATUS_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
@@ -35,7 +32,6 @@ def update_status():
     today = time.strftime("%Y-%m-%d")
     if data.get("updated") == today:
         return data.get("status", "")
-
     if data.get("status"):
         prompt = (
             IDENTITY+f"你之前的近况是：{data['status']}。"
@@ -113,14 +109,12 @@ def update_mood():
     save_mood(data)
     return new_mood
 SEEN_FILE = "seen.json"
-
 def load_seen():
     try:
         with open(SEEN_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return {"last_seen": ""}
-
 def save_seen(data):
     with open(SEEN_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
@@ -135,21 +129,17 @@ def get_greeting():
             last = 0
     else:
         last = 0
-
     # 不管说不说话，都先把"这次见面时间"记下来
     save_seen({"last_seen": time.strftime("%Y-%m-%d %H:%M")})
-
     gap_hours = (now - last) / 3600
     if last == 0 or gap_hours < 2:
         return ""   # 第一次见面或刚分开不久，不主动搭话
-
     if gap_hours >= 48:
         hint = f"馒头已经{int(gap_hours // 24)}天没来找你了，他刚刚上线了"
     elif gap_hours >= 24:
         hint = "馒头隔了一整天没来，他刚刚上线了"
     else:
         hint = f"馒头离开了大概{int(gap_hours)}个小时，他刚刚上线了"
-
     status_data = load_status()
     mood_data = load_mood()
     prompt = (
@@ -170,5 +160,4 @@ def get_greeting():
         temperature=0.8,
         max_tokens=100,
     )
-
     return resp.choices[0].message.content.strip()

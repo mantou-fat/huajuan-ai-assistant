@@ -3,9 +3,7 @@
 原则：只依赖 参数 + config 里的词表，绝不读写 messages/mem/文件，所以能单独测试。"""
 import re
 from datetime import datetime, timedelta
-
 from config import KB_STRONG, KB_WEAK, PROGRAM_NAMES
-
 def _is_aside_content(s):
     """括号里是不是'旁白'？判定：≤12字的纯中文/中文标点/emoji 才算（如 托腮、小声）。
     出现数字、字母、运算符、网址、冒号的括号是正文（如 （2+1）、print(x)、（RAG）），必须保留"""
@@ -14,7 +12,6 @@ def _is_aside_content(s):
     if re.search(r"[0-9０-９a-zA-Z():：、/\\]", s):
         return False
     return bool(re.fullmatch(r"[\u4e00-\u9fff\u3000-\u303f\U0001F000-\U0001FAFF~～!！?？。，…\s]+", s))
-
 def clean_aside(text):
     """删掉'旁白型'括号（如（托腮）（小声）），保留代码/数学/英文括号（如 print(x)、（2+1））。
     直播（逐字流）和最终回答共用这一把刀；旁白判定看 _is_aside_content"""
@@ -37,7 +34,6 @@ VISION_WEAK = ["看看我", "看我", "看一眼", "看看你", "看屏幕", "�
 # 排除词：弱触发命中后句子里出现这些，说明用户要看的是文字内容，不开摄像头
 VISION_EXCLUDE = ["文章", "代码", "简历", "写的", "写得", "邮件", "消息", "作业", "报错", "错误", "问题",
                   "这个", "那张", "图片", "照片", "截图", "翻译", "天气", "下雨"]
-
 def looks_like_vision(text):
     """规则引擎：像想看画面的请求就返回 True"""
     if any(kw in text for kw in VISION_STRONG):
@@ -56,7 +52,6 @@ WEATHER_QUICK = re.compile(r"^.{0,10}(天气|气温|温度).{0,4}(怎么样|如�
 EXPENSE_SET = re.compile(r"(花了|花掉|用了|用掉|付了|付|消费了?|充值了?|买了|请了).{0,6}\d+(\.\d+)?\s*(元|块|块钱|rmb)", re.I)
 EXPENSE_SET2 = re.compile(r"(记账|记一笔|帮我记|记一下|记个账).{0,10}(花了|花|消费|买了|付了|支出|用)?\d+(\.\d+)?\s*(元|块|块钱)")
 EXPENSE_QUERY = re.compile(r"花了多少钱|消费了?多少钱|花了多少|这个月(花了|的)?(钱|花销|支出|账|账单)|上个月(花了|的)?(钱|花销|支出|账|账单)|查(一?下)?账|看(一?下)?账|账本|记账记录|支出记录|账单|钱都花哪|都花到哪")
-
 def detect_hard_tool(text):
     """规则引擎：这一句是'必须真调工具'的请求？是→返回要强制的工具名；不是→None。
     顺序：时间 → 天气 → 记一笔 → 查账 → 开程序/网站 → 截屏 → 锁屏
