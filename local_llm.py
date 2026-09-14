@@ -85,7 +85,9 @@ class _Choice:
 
 class _Chunk:
     def __init__(self, delta=None, finish_reason=None):
-        self.choices = [_Choice(delta=delta, finish_reason=finish_reason)]
+        # delta 绝不能是 None：上层 create_stream 会直接读 ch.delta.content，
+        # 之前结束块给了 None，端到端就炸出 'NoneType' object has no attribute 'content'
+        self.choices = [_Choice(delta=delta if delta is not None else _Delta(), finish_reason=finish_reason)]
         self.model = "local"
 
 
@@ -142,6 +144,14 @@ def parse_tool_calls(text, allowed_names=None):
     return calls
 
 
+# 本地小模型的通病：明明在闲聊也乱调工具。实测 7 个用例里错了 2 个
+# （"今天心情不错"→去调摄像头，"讲个笑话"→去联网搜索），云端模型不会这样。
+# 所以在给它工具时，必须先立规矩——这条提示词就是"本地通道的兜底"。
+TOOL_RULE = ("【工具使用规则】只有当用户明确要你做事（问时间、查天气、记一笔账、设提醒、"
+             "开关程序/设备、查资料等）时才调用工具。闲聊、打招呼、表达心情、让你讲笑话或陪你说话时，"
+             "绝对不要调用任何工具，直接用你自己的话回答。")
+
+
 class _LocalPipeline:
     """模型本体：懒加载（第一次用时才加载，避免启动就吃几秒 + 几百 MB 内存）"""
     def __init__(self, model_path=None, device=None):
@@ -149,6 +159,12 @@ class _LocalPipeline:
         self.device = device or LOCAL_DEVICE
         self._pipe = None
         self._lock = threading.Lock()
+        # 本地引擎一次只能生成一个：云端是别人的服务器，能同时接几百个请求；
+        # 本地就是你这一块 CPU/GPU，两个线程同时 generate 会被引擎直接拒绝
+        # （实测报错：Generate cannot be called while ContinuousBatchingPipeline is already in running state）。
+        # 所以并发请求必须在适配层排队——这也是本地部署和云端部署最大的区别之一。
+        self._gen_lock = threading.Lock()
+        self.waited = 0            # 有多少次请求因为排队等过
         self.load_seconds = None
         self.stats = {"生成次数": 0, "生成token数": 0, "总耗时秒": 0.0, "首字延迟秒": []}
     def pipe(self):
@@ -159,7 +175,10 @@ class _LocalPipeline:
                 os.environ.setdefault("OV_TELEMETRY_DISABLE", "1")   # 关掉遥测，别往外发东西
                 import openvino_genai as ov
                 t0 = time.time()
-                self._pipe = ov.LLMPipeline(self.model_path, self.device)
+                # CACHE_DIR：把编译好的模型缓存在模型旁边，第二次启动能快很多
+                cache = os.path.join(os.path.dirname(self.model_path), "ov_cache")
+                cfg = {"CACHE_DIR": cache} if os.path.isdir(os.path.dirname(self.model_path)) else {}
+                self._pipe = ov.LLMPipeline(self.model_path, self.device, cfg)
                 self.load_seconds = time.time() - t0
             return self._pipe
     def build_prompt(self, messages, tools=None):
@@ -182,30 +201,61 @@ class _LocalPipeline:
         except Exception:
             pass
         t0 = time.time()
-        out = self.pipe().generate(prompt, cfg, streamer) if streamer else self.pipe().generate(prompt, cfg)
+        if not self._gen_lock.acquire(blocking=False):
+            self.waited += 1                    # 有人正在生成，我们排队（记一笔，方便看本地到底堵不堵）
+            self._gen_lock.acquire()            # 这里才真的阻塞等前一个生成完
+        try:
+            out = self.pipe().generate(prompt, cfg, streamer) if streamer else self.pipe().generate(prompt, cfg)
+        finally:
+            self._gen_lock.release()
         cost = time.time() - t0
         text = out if isinstance(out, str) else (out.texts[0] if getattr(out, "texts", None) else str(out))
         self.stats["生成次数"] += 1
         self.stats["总耗时秒"] += cost
-        try:                                        # 引擎自带性能指标：生成了多少 token、首字多慢
-            pm = out.perf_metrics
-            n = pm.get_num_generated_tokens()
-            self.stats["生成token数"] += n
-            self.stats["首字延迟秒"].append(round(pm.get_ttft().mean, 3))
-            text = text  # 数字已在 stats 里
-        except Exception:
-            pass
+        self.stats["生成字数"] = self.stats.get("生成字数", 0) + len(text)
+        try:
+            # 引擎自带性能指标。坑：MeanStdPair.mean 是"方法"不是属性，直接 round(x.mean) 会报错。
+            # 另外流式调用返回的是字符串（没有 perf_metrics），必须先判断类型。
+            pm = getattr(out, "perf_metrics", None)
+            if pm is not None:
+                n = _plain(pm.get_num_generated_tokens())
+                self.stats["生成token数"] += int(n or 0)
+                self.stats["首字延迟秒"].append(round(float(_plain(pm.get_ttft().mean)), 3))
+        except Exception as e:
+            self.stats["指标读取失败"] = "%s: %s" % (type(e).__name__, e)
         return text, cost
     def summary(self):
         s = dict(self.stats)
         n, sec = s["生成token数"], s["总耗时秒"]
         s["平均速度(token/s)"] = round(n / sec, 2) if sec > 0 else 0
-        ttfts = s.pop("首字延迟秒")
+        s["平均速度(字/s)"] = round(s.get("生成字数", 0) / sec, 2) if sec > 0 else 0
+        ttfts = s.pop("首字延迟秒", [])
         s["平均首字延迟秒"] = round(sum(ttfts) / len(ttfts), 3) if ttfts else None
         s["模型"] = os.path.basename(self.model_path)
         s["设备"] = self.device
         s["加载耗时秒"] = round(self.load_seconds, 2) if self.load_seconds else None
+        s["排队等待过的次数"] = self.waited
         return s
+
+
+def _inject_system(messages, text):
+    """把一句系统要求并进"第一条 system 消息"里。
+    为什么不能简单 append 一条 system：Qwen 的对话模板只在开头渲染 system 块，
+    末尾再挂一条 system 紧挨着 assistant，小模型会直接懵掉——
+    实测强制作业的 prompt 让 3B 吐出 "Podesta，请稍等" 这种胡话。
+    这里顺手做浅拷贝，绝不改动调用方（bot.py）手里的历史消息。"""
+    msgs = [dict(m) for m in (messages or [])]
+    for m in msgs:
+        if m.get("role") == "system":
+            m["content"] = ((m.get("content") or "") + "\n" + text).strip()
+            return msgs
+    msgs.insert(0, {"role": "system", "content": text})
+    return msgs
+
+
+def _plain(x):
+    """MeanStdPair 这类包装：字段可能是方法也可能是属性，统一取出来"""
+    return x() if callable(x) else x
 
 
 def _normalize(messages):
@@ -302,8 +352,10 @@ class LocalClient:
             name = (tool_choice.get("function") or {}).get("name")
             if name:
                 tools = [t for t in tools if t["function"]["name"] == name] or tools
-                messages = list(messages) + [{"role": "system", "content":
-                    "【本轮硬性要求】必须调用工具 %s，不允许只说不做，也不允许编造它的返回结果。" % name}]
+                messages = _inject_system(messages,
+                    "【本轮硬性要求】必须调用工具 %s，不允许只说不做，也不允许编造它的返回结果。" % name)
+        if tools:                             # 给工具就得同时立规矩，否则它逮着啥都调
+            messages = _inject_system(messages, TOOL_RULE)
         return messages, tools, None
     def _create(self, model, messages, tools, tool_choice, stream,
                 temperature, max_tokens, top_p, **kw):
