@@ -49,8 +49,13 @@ def skip(name, why=""):
     SKIP.append(name)
     print(f"[SKIP] {name}  | {why}")
 
+_provider = config.MODEL_PROVIDER
+_is_local = (_provider == "local")
+_t_start = time.time()
 print("=" * 64)
 print("花卷一键体检开始  (21 个工具逐个过)")
+print("模型通道: %s" % ("本地模型 OpenVINO + %s (%s)" % (
+    os.path.basename(config.LOCAL_MODEL_PATH), config.LOCAL_DEVICE) if _is_local else "云端 阿里云百炼 通义千问"))
 print("=" * 64)
 
 # ---------- 1. 工具注册表 ----------
@@ -220,8 +225,12 @@ t("记账: 强制真调 set_expense 且落盘", "set_expense" in tool_seen and "
 fresh(); r = bot.get_reply("我这个月一共花了多少钱？")
 t("查账: 强制真调 query_expenses", "query_expenses" in tool_seen, f"调用:{tool_seen}")
 
-fresh(); r = bot.get_reply("什么是RAG？简单说说")
-t("知识库检索正常(search_knowledge/RAG)", len(r) > 20 and "服务暂时不可用" not in r)
+fresh()
+if _is_local:
+    skip("知识库检索正常(search_knowledge/RAG)", "本地模式还没接本地 embedding(下一步做)，现在是云端 embedding")
+else:
+    r = bot.get_reply("什么是RAG？简单说说")
+    t("知识库检索正常(search_knowledge/RAG)", len(r) > 20 and "服务暂时不可用" not in r)
 
 fresh(); r = bot.get_reply("帮我搜索一下：DeepSeek V3")
 t("联网搜索正常(web_search)", "web_search" in tool_seen or len(r) > 20)
@@ -456,7 +465,10 @@ def rag_hit3():
     hits = sum(1 for q, n in RAG_QS if kb[n - 1] in bot.top_k_search(q, k=3, threshold=0.35))
     return hits == len(RAG_QS)
 
-run_case("RAG召回尺子: 12/12 全命中", rag_hit3, tries=1)
+if _is_local:
+    skip("RAG召回尺子: 12/12 全命中", "需要云端 embedding(本地 embedding 是下一步)")
+else:
+    run_case("RAG召回尺子: 12/12 全命中", rag_hit3, tries=1)
 run_case("记忆: 告诉一次→跨会话能想起(含落盘)", case_memory_recall, tries=2)
 # ===== 知识路由回归：防止重复定义/漏词再次发生（改词表后必须仍全过）=====
 KB_ROUTE_CASES = [
@@ -488,6 +500,14 @@ t("知识路由: 术语=strong", bot.knowledge_hit_level("什么是RAG") == "str
 t("知识路由: 闲聊弱词=weak", bot.knowledge_hit_level("这张图是什么颜色") == "weak")
 t("知识路由: 无关=None", bot.knowledge_hit_level("哈哈今天开心") is None)
 print(f"体检完成: 通过 {len(PASS)} / 失败 {len(FAIL)} / 跳过 {len(SKIP)}")
+print(f"模型通道: {'本地 ' + os.path.basename(config.LOCAL_MODEL_PATH) if _is_local else '云端 通义千问'}"
+      f"  |  全程耗时 {time.time() - _t_start:.1f} 秒")
+if _is_local:                                  # 本地模式把引擎自己的性能数据也打出来，方便和云端对比
+    try:
+        import json as _json
+        print("本地引擎性能: " + _json.dumps(bot.client.stats(), ensure_ascii=False))
+    except Exception as _e:
+        print("(取本地性能数据失败: %s)" % _e)
 if FAIL:
     print("❌ 失败项:")
     for x in FAIL:
