@@ -22,6 +22,17 @@ EXCLUDE_FILES = [".env"]
 # ---- 对话参数 ----
 MAX_MESSAGES = 20
 MEMORY_MERGE_EVERY = 5
+# ---- 模型通道：cloud=阿里云百炼(默认) / local=本机模型 ----
+# 改 .env 里一行 MODEL_PROVIDER=local 就能切成本地模型，云端本地双通道
+try:
+    from dotenv import load_dotenv
+    load_dotenv()          # 让 .env 里的开关也生效（config 被最早的模块 import，必须自己加载）
+except ImportError:
+    pass
+MODEL_PROVIDER = os.environ.get("MODEL_PROVIDER", "cloud").strip().lower()
+LOCAL_MODEL_PATH = os.environ.get("LOCAL_MODEL_PATH", r"D:\models\qwen2.5-3b-instruct-q4_k_m.gguf")
+LOCAL_DEVICE = os.environ.get("LOCAL_DEVICE", "CPU").strip().upper()   # CPU / GPU / AUTO
+LOCAL_MAX_NEW_TOKENS = int(os.environ.get("LOCAL_MAX_NEW_TOKENS", "1024"))
 # ---- 幂等重试白名单（只放读类/无副作用工具）----
 RETRYABLE_TOOLS = {"get_time", "get_weather", "query_expenses", "list_files", "read_file",
                    "read_webpage", "web_search", "search_knowledge", "look_around", "dispatch_agent"}

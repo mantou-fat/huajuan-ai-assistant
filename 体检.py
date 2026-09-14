@@ -29,6 +29,8 @@ for f in DATA_FILES:
 
 import bot
 import rag                      # 长文分块/知识入库的离线检查要用（bot 已 import 过，这里只是拿个名字）
+import config                   # 会话层检查要拿数据文件常量对账（同上）
+import sessions                 # 会话层（多用户改造地基）的离线检查
 tool_log = []
 for _name, _fn in list(bot.TOOL_FUNCS.items()):
     def _wrap(fn, name):
@@ -131,6 +133,39 @@ sys.modules["ctypes"] = fake
 bot.lock_screen()
 t("lock_screen 代码路径正常(桩)", locked == [1])
 del sys.modules["ctypes"]
+
+# ---------- 2.5 会话层(多用户改造的地基, 全离线不花钱) ----------
+_d = sessions.Session(sessions.DEFAULT_SID, legacy=True)
+_pairs = [("history", "HISTORY_FILE"), ("memory", "MEMORY_FILE"), ("vec_cache", "VEC_CACHE_FILE"),
+          ("status", "STATUS_FILE"), ("mood", "MOOD_FILE"), ("expense", "EXPENSE_FILE"),
+          ("reminder", "REMINDER_FILE"), ("home", "HOME_FILE"), ("summary", "SUMMARY_FILE"),
+          ("seen", "SEEN_FILE")]
+_diff = [(k, _d.file(k), getattr(config, a)) for k, a in _pairs if _d.file(k) != getattr(config, a)]
+t("会话层: default 会话的 10 个数据文件路径与 config 常量逐字相同(单用户零变化)", not _diff, _diff or "全部一致")
+_u1, _u2 = sessions.Session("u_001"), sessions.Session("u_002")
+_u1.messages.append({"role": "user", "content": "我是A"}); _u1.mem.append("A爱喝咖啡")
+_u1.pending_writes["x"] = 1; _u1.phone_actions["t"] = 1
+_u1.location["lat"] = 31.2; _u1.pending_lock[0] = True
+t("会话层: 两个用户的消息/记忆/待确认/手机动作/定位/锁屏门全部互不串",
+  (len(_u1.messages) == 1 and not _u2.messages and _u1.mem and not _u2.mem
+   and _u1.pending_writes and not _u2.pending_writes and _u1.phone_actions and not _u2.phone_actions
+   and _u1.location["lat"] == 31.2 and _u2.location["lat"] is None
+   and _u1.pending_lock[0] and not _u2.pending_lock[0]))
+t("会话层: 数据文件按用户分片(在 data/<sid>/ 下)", "u_001" in _u1.file("history") and _u1.file("history") != _u2.file("history"), _u1.file("history"))
+_bad_sid = []
+for _s in ["../../etc/passwd", "..\\..\\win", "a/b", "", "x" * 33, "用户A", "a b"]:
+    try: sessions.Session(_s)
+    except ValueError: _bad_sid.append(_s)
+t("会话层: 非法 sid 被拒(防目录穿越/超长/中文)", len(_bad_sid) == 7, "挡住 %d/7" % len(_bad_sid))
+_u1.lock.acquire(); _got = _u2.lock.acquire(timeout=0.5)
+if _got: _u2.lock.release()
+_u1.lock.release()
+t("会话层: 锁按用户分(A 持锁不堵 B)", _got)
+_st = sessions.SessionStore(max_sessions=3, min_idle_for_evict=0)
+_st.get()                                   # 先建出 default 会话，才能验"它永远不会被卸载"
+for _i in range(6): _st.get("u_10%d" % _i)
+t("会话层: 超上限自动卸载空闲会话(内存保护)", _st.evicted > 0, _st.stats())
+t("会话层: default 永不被卸载", sessions.DEFAULT_SID in _st.sids(), _st.sids())
 
 # ---------- 3. 在线链路(真 API) ----------
 tool_seen = []
