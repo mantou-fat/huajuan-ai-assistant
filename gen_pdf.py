@@ -164,8 +164,9 @@ def parse(md_lines):
     return flow
 
 def md_to_pdf(out, md_lines, title="花卷文档", author="花卷生成", footer="花卷生成"):
-    """把 markdown 行列表排成 PDF。
+    """把 markdown 行列表排成 PDF（带封面页）。
     md_lines: 字符串列表（每行一条）；out: 输出 PDF 路径。返回页数。"""
+    from datetime import datetime
     styles()
 
     def _footer(canvas, doc):
@@ -175,11 +176,30 @@ def md_to_pdf(out, md_lines, title="花卷文档", author="花卷生成", footer
         canvas.drawCentredString(A4[0] / 2, 8 * mm, "%s · 第 %d 页" % (footer, doc.page))
         canvas.restoreState()
 
+    def _blank(canvas, doc):
+        pass
+
+    # 封面页：标题居中大字 + 作者 + 日期（第一页不留页脚）
+    cover = []
+    if title:
+        cover = [
+            Spacer(1, 120),
+            Paragraph(esc(title), ParagraphStyle("cover_title", fontName="MSYHBD", fontSize=26,
+                                                 leading=34, textColor=C_TITLE, alignment=1,
+                                                 spaceAfter=24)),
+            Paragraph(esc(author), ParagraphStyle("cover_author", fontName="MSYH", fontSize=14,
+                                                  leading=20, textColor=C_QUOTE, alignment=1)),
+            Paragraph(datetime.now().strftime("%Y-%m-%d"),
+                      ParagraphStyle("cover_date", fontName="MSYH", fontSize=11, leading=16,
+                                     textColor=C_QUOTE, alignment=1)),
+            PageBreak(),
+        ]
+
     doc = SimpleDocTemplate(out, pagesize=A4, leftMargin=15 * mm, rightMargin=15 * mm,
                             topMargin=13 * mm, bottomMargin=14 * mm,
                             title=title, author=author)
-    flow = parse(md_lines)
-    doc.build(flow, onFirstPage=_footer, onLaterPages=_footer)
+    flow = cover + parse(md_lines)
+    doc.build(flow, onFirstPage=_blank if cover else _footer, onLaterPages=_footer)
     return doc.page
 
 
