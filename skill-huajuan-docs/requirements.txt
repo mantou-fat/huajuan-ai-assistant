@@ -1,0 +1,3 @@
+reportlab
+python-pptx
+python-docx
