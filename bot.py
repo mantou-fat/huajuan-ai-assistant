@@ -6,6 +6,7 @@ import hashlib
 import queue      
 import threading 
 from concurrent.futures import ThreadPoolExecutor  # 第3课：多手下并行干活靠它
+from sessions import current
 import requests
 import base64
 from openai import OpenAI
@@ -126,17 +127,19 @@ def create_stream(messages, tools=TOOLS,on_text=None,model="qwen-plus", tool_cho
     return {"content": content, "tool_calls": tcs, "finish_reason": finish}
 def load_history():
     try:
-        with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+        with open(current().file("history"), "r", encoding="utf-8") as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return [{"role": "system", "content": SYSTEM_PROMPT}]
+
 def save_history(messages):
-    with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+    with open(current().file("history"), "w", encoding="utf-8") as f:
         json.dump(messages, f, ensure_ascii=False, indent=2)
+
 def clear_history():
     global messages
     with chat_lock:
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        messages[:] = [{"role": "system", "content": SYSTEM_PROMPT}]
         # 清空对话后重新注入近况和记忆，否则花卷会"失忆"到下次重启
         s = load_status()
         if s.get("status"):
@@ -165,7 +168,7 @@ def extract_memory(user_input, reply):
     return ""
 def load_summary():
     try:
-        with open(SUMMARY_FILE, "r", encoding="utf-8") as f:
+        with open(current().file("summary"), "r", encoding="utf-8") as f:
             data = json.load(f)
             return {"summary": data.get("summary", ""), "pending": data.get("pending", [])}
     except (FileNotFoundError, json.JSONDecodeError):
@@ -475,7 +478,8 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=
               "ok" if not failed else "failed", ok=not failed)
     return full_reply
 print("ai智能机器人已启用（输入 exit 退出，输入 add 添加知识）\n")
-messages = load_history()
+messages = current().messages
+messages[:] = load_history()
 # 人设永远以 persona.txt 为准：history.json 里可能存着旧人设，直接覆盖成最新读到的，
 # 否则改了 persona.txt 重启也看不到效果（这是"persona 新内容读不到"的根因）
 if messages and messages[0].get("role") == "system":
@@ -485,7 +489,7 @@ else:
 # 清掉上次运行时注入的近况/心情/记忆 system 消息，只保留第一条人设，
 # 防止每重启一次程序就多攒一份，越积越多把对话撑爆
 if len(messages) > 1:
-    messages = [messages[0]] + [m for m in messages[1:] if m["role"] != "system"]
+    messages[:] = [messages[0]] + [m for m in messages[1:] if m["role"] != "system"]
 # 近况/心情刷新放在 import 时会调网络 API——开机自启时网络可能还没就绪，
 # 一旦抛异常整个服务就起不来。包上 try/except：失败就跳过，绝不挡启动
 try:

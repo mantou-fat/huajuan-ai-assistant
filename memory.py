@@ -4,35 +4,34 @@
 所以必须留在本文件里（global 才有意义）。"""
 import json
 from config import MEMORY_FILE, VEC_CACHE_FILE, MEMORY_MERGE_EVERY
+from sessions import current
 from llm import client
 from rag import get_embedding, cosine_similarity
-_mem_embeddings = None  # 记忆向量缓存，记忆变了才重算
-_last_merge_len = None  # 上次合并时记忆库的长度（maybe_merge_memory 用它判断攒够没）
+
 def retrieve_memory(query, k=4, threshold=0.35):
-    """按相似度从记忆里召回最相关的几条，而不是全量塞给模型"""
-    global _mem_embeddings
     mem = load_memory()
     if not mem:
         return []
-    if _mem_embeddings is None:
-        # 先看磁盘缓存：记忆条数没变就直接用，不用重新调接口算向量
+    emb = current().mem_embeddings
+    if emb is None:
         disk_cache = None
         try:
-            with open(VEC_CACHE_FILE, "r", encoding="utf-8") as f:
+            with open(current().file("vec_cache"), "r", encoding="utf-8") as f:
                 disk_cache = json.load(f)
         except (FileNotFoundError, json.JSONDecodeError):
             pass
         if disk_cache is not None and len(disk_cache) == len(mem):
-            _mem_embeddings = disk_cache
+            emb = disk_cache
         else:
-            _mem_embeddings = get_embedding(mem)
+            emb = get_embedding(mem)
             try:
-                with open(VEC_CACHE_FILE, "w", encoding="utf-8") as f:
-                    json.dump(_mem_embeddings, f)
+                with open(current().file("vec_cache"), "w", encoding="utf-8") as f:
+                    json.dump(emb, f)
             except OSError as e:
                 print("向量缓存写盘失败（不影响功能）：", e)
-    query_vec = get_embedding([query[:2000]])[0]   # 查询串太长会顶爆 embedding 接口，先截前2000字
-    sims = [(i, cosine_similarity(query_vec, v)) for i, v in enumerate(_mem_embeddings)]
+        current().mem_embeddings = emb
+    query_vec = get_embedding([query[:2000]])[0]
+    sims = [(i, cosine_similarity(query_vec, v)) for i, v in enumerate(emb)]
     sims.sort(key=lambda x: x[1], reverse=True)
     results = []
     for i, score in sims:
@@ -41,18 +40,18 @@ def retrieve_memory(query, k=4, threshold=0.35):
     return results
 def load_memory():
     try:
-        with open(MEMORY_FILE, "r", encoding="utf-8") as f:
+        with open(current().file("memory"), "r", encoding="utf-8") as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return []
+
 def save_memory(memory):
-    global _mem_embeddings
-    _mem_embeddings = None  # 记忆变了，向量缓存作废
-    with open(MEMORY_FILE, "w", encoding="utf-8") as f:
+    current().mem_embeddings = None   # 记忆变了，向量缓存作废（原来是 global _mem_embeddings = None）
+    with open(current().file("memory"), "w", encoding="utf-8") as f:
         json.dump(memory, f, ensure_ascii=False, indent=2)
 def delete_memory(index):
     """删除指定索引的记忆。index 先强转整数（接口可能传来 0.5、"0" 这种），转不了就返回 None"""
-    global mem
+    mem = current().mem
     try:
         index = int(index)
     except (TypeError, ValueError):
@@ -113,18 +112,19 @@ def merge_memory(threshold=0.70):
     return mem
 def maybe_merge_memory():
     """记忆新增攒够 N 条就全库去重合并一次；失败静默，绝不打断对话"""
-    global _last_merge_len
+    cur_len = current().last_merge_len
     cur = len(load_memory())
-    if _last_merge_len is None:
-        _last_merge_len = cur
+    if cur_len is None:
+        current().last_merge_len = cur
         return
-    if cur - _last_merge_len >= MEMORY_MERGE_EVERY:
+    if cur - cur_len >= MEMORY_MERGE_EVERY:
         try:
             merge_memory()          # 内部会 save_memory + 清向量缓存
         except Exception as e:
             print("记忆合并失败(不影响功能):", e)
-        global mem
+        mem = current().mem
         mem[:] = load_memory()      # 同步内存里的 mem，防止下次追加把合并结果覆盖回去
-        _last_merge_len = len(mem)
+        current().last_merge_len = len(mem)
 # 模块级状态：全体共享同一个列表对象（bot 里 mem.append(...) 也改的是这一份）
-mem = load_memory()
+mem = current().mem
+mem[:] = load_memory()
