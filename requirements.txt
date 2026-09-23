@@ -6,6 +6,7 @@ numpy
 beautifulsoup4
 python-dotenv
 pillow
+reportlab          # 生成器 gen_pdf.py（Markdown → PDF）
 
 # ---- 可选：本地小模型（走 local_llm.py，用云端模型则不需要）----
 # openvino-genai>=2026.3.1
