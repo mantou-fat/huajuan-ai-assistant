@@ -14,6 +14,19 @@
 > copy knowledge_base.example.txt knowledge_base.txt
 > ```
 
+## 30 秒看效果
+
+花卷的 `make_pdf` / `make_ppt` 工具能把同一篇 Markdown 变成排版好的 PDF 和 PPT，输入见 [`demo/demo.md`](demo/demo.md)：
+
+- 📄 生成的 PDF：**[demo/demo.pdf](demo/demo.pdf)**（GitHub 上可直接预览第一页）
+- 📊 生成的 PPT：**[demo/demo.pptx](demo/demo.pptx)**
+
+同一套生成器，可复现：
+
+```
+python demo\make_demo.py
+```
+
 ## 功能特性
 
 - **23 个 Agent 工具**：查时间/天气、记账查账、定时提醒、文件盒读写、网页阅读、联网搜索、知识库检索、
