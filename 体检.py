@@ -135,11 +135,11 @@ with open("home.json", "w", encoding="utf-8") as f:
     json.dump(orig_home, f, ensure_ascii=False, indent=2)
 
 # 手机动作登记
-bot.PHONE_ACTIONS.clear()
+bot.current().phone_actions.clear()
 bot.set_timer(10); bot.open_app("微信"); bot.create_reminder("买牛奶")
 t("手机动作登记(set_timer/open_app/create_reminder)",
-  bot.PHONE_ACTIONS.get("minutes") == 10 and bot.PHONE_ACTIONS.get("app") == "微信"
-  and bot.PHONE_ACTIONS.get("text") == "买牛奶")
+  bot.current().phone_actions.get("minutes") == 10 and bot.current().phone_actions.get("app") == "微信"
+  and bot.current().phone_actions.get("text") == "买牛奶")
 
 # 危险工具执行链(桩: 不真弹窗/不真锁屏)
 calls = []
@@ -198,9 +198,9 @@ def _spy(messages, tools=bot.TOOLS, on_text=None, model="qwen-plus", tool_choice
 bot.create_stream = _spy
 
 def fresh():
-    bot.messages = [{"role": "system", "content": bot.SYSTEM_PROMPT}]
-    bot.PHONE_ACTIONS.clear()
-    bot.PENDING_LOCK[0] = False
+    bot.messages[:] = [{"role": "system", "content": bot.SYSTEM_PROMPT}]
+    bot.current().phone_actions.clear()
+    bot.current().pending_lock[0] = False
     tool_seen.clear()
 
 def test_hallucination():

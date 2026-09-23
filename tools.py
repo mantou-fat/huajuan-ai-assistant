@@ -8,13 +8,13 @@ import base64
 import hashlib
 import requests
 from concurrent.futures import ThreadPoolExecutor
+from sessions import current
 from bs4 import BeautifulSoup
 from config import (REMINDER_FILE, EXPENSE_FILE, HOME_FILE, FILES_DIR, READ_DIRS,
                     EXCLUDE_FILES, PROGRAM_LIST)
 from llm import client, api_key, tavily_key, bjs_key, workspace_id
 from rag import search_knowledge, get_embedding, cosine_similarity
-PENDING_WRITES = {}              # 待确认写入（write_file 两步确认用）
-PHONE_ACTIONS = {}               # 手机动作登记表：电脑上的工具只"开单子"，真动作由手机执行
+
 def load_expenses():
     try:
         with open(EXPENSE_FILE, "r", encoding="utf-8") as f:
@@ -407,14 +407,14 @@ def get_time():
     from datetime import datetime
     now = datetime.now()
     return now.strftime("%Y-%m-%d %H:%M") + " 周" + "一二三四五六日"[now.weekday()]
-user_location = {"lat": None, "lon": None}
+
 def get_weather(city=""):
     """city 可省略：没城市就看定位，再没有就引导用户说出城市（不许让模型编天气）"""
     try:
         if city:
             query = city
-        elif user_location["lat"] is not None:
-            query = str(user_location["lat"]) + "," + str(user_location["lon"])
+        elif current().location["lat"] is not None:
+            query = str(current().location["lat"]) + "," + str(current().location["lon"])
         else:
             return "没拿到城市，也没定位信息，问一下用户想查哪里"
         r = requests.get("https://wttr.in/" + query, params={"format": "j1", "lang": "zh"}, timeout=8)
@@ -596,18 +596,18 @@ def write_file(filename, content, confirm=False):
     if path is None:
         return "这个文件不在我的文件盒里，只能写 huajuan_files 文件夹里的文件"
     if confirm is not True:
-        PENDING_WRITES[path] = content
+        current().pending_writes[path] = content
         warn = ""
         if os.path.exists(path):
             warn = "（注意：文件已存在，写入会整份覆盖）"
         return "已登记待写入「" + filename + "」，共" + str(len(content)) + "字" + warn + "，尚未写入磁盘。请如实转告用户：内容还没写入，在等确认。用户明确同意后，再次调用write_file，filename和content必须与本次完全一致，并传confirm=true"
-    old = PENDING_WRITES.get(path)
+    old = current().pending_writes.get(path)
     if old != content:
         return "这次的内容和用户确认过的不一致，尚未写入磁盘。请如实转告用户并重新请求确认"
     try:
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
-        PENDING_WRITES.pop(path, None)
+        current().pending_writes.pop(path, None)    
         return "已写入「" + filename + "」"
     except Exception as e:
         return "写文件失败：" + str(e)
@@ -678,21 +678,23 @@ def set_reminder(remind_time, content):
         return f"已记住：{remind_time} 提醒你 {content}"
     except Exception as e:
         return f"设提醒失败：{e}"
+
 def set_timer(minutes):
     """手机倒计时工具：只登记，不真的计时"""
-    PHONE_ACTIONS["action"] = "set_timer"
-    PHONE_ACTIONS["minutes"] = int(minutes)
+    current().phone_actions["action"] = "set_timer"
+    current().phone_actions["minutes"] = int(minutes)
     return f"手机倒计时已登记：{minutes} 分钟。请如实转告用户：手机会在 {minutes} 分钟后响铃，等他同意后再执行。"
 def open_app(app_name):
     """打开手机应用工具：只登记，不真的打开"""
-    PHONE_ACTIONS["action"] = "open_app"
-    PHONE_ACTIONS["app"] = app_name
+    current().phone_actions["action"] = "open_app"
+    current().phone_actions["app"] = app_name
     return f"打开应用已登记：{app_name}。请如实转告用户：将为他打开 {app_name}，等他同意后再执行。"
 def create_reminder(text):
     """手机提醒事项工具：只登记，不真的写入"""
-    PHONE_ACTIONS["action"] = "create_reminder"
-    PHONE_ACTIONS["text"] = text
+    current().phone_actions["action"] = "create_reminder"
+    current().phone_actions["text"] = text
     return f"提醒事项已登记：{text}。请如实转告用户：提醒已准备好，等他同意后再加到手机里。"
+
 def open_program(program_name):
     """打开程序/网站。安全靠两层：①ACCESS_TOKEN 门（外人进不来）②人设要求先问用户再调本工具。
     注：曾试过加 confirm 参数做代码级确认，但模型常漏传导致'用户已同意却仍被拦'，故去掉（2026-09-05）"""

@@ -36,7 +36,7 @@ from memory import (mem, load_memory, save_memory, delete_memory, retrieve_memor
 from persona_state import (SYSTEM_PROMPT, IDENTITY, load_status, save_status, update_status,
                            load_mood, save_mood, update_mood, mood_shift,
                            load_seen, save_seen, get_greeting)
-from tools import (TOOLS, TOOL_FUNCS, AGENTS, PENDING_WRITES, PHONE_ACTIONS, user_location,
+from tools import (TOOLS, TOOL_FUNCS, AGENTS, 
                    get_time, get_weather, set_reminder, set_expense, query_expenses,
                    load_expenses, save_expenses, expense_summary,
                    load_reminders, save_reminders, check_reminders,
@@ -47,8 +47,7 @@ from tools import (TOOLS, TOOL_FUNCS, AGENTS, PENDING_WRITES, PHONE_ACTIONS, use
                    control_device, tts)
 # ---- 运行时状态：只在本模块使用，不放 config（配置）也不放 rules（纯规则）----
 _audit_lock = threading.Lock()   # 多线程并发写审计日志要加锁，防止两行搅在一起
-PENDING_LOCK = [False]           # 锁屏确认门状态（用列表包一层，改元素不用写 global）
-# messages 是全局共享状态，Flask 多线程下可能串话，加把锁
+       
 chat_lock = threading.Lock()
 # 第18个工具：子AI名册（给手下上编制）。每个成员的"专长"= 它的 system 人设
 # ============ 第4课 map-reduce：大任务拆给手下分头干 ============
@@ -268,7 +267,7 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=
     """输入问题，返回回答。print_stream=True 时边生成边打印（命令行用）"""
     # 防御：接口传进来的不一定是字符串
     user_input = str(user_input) if user_input is not None else ""
-    PHONE_ACTIONS.clear()  # 每轮开头清空登记，防止上一轮的"单子"残留被下轮带走
+    current().phone_actions.clear()
     with chat_lock:  # 防止多线程并发时 messages 串话
         user_msg = user_input
         # 知识题硬性兜底：命中关键词就强制检索并注入资料，模型没有"不查"的选项
@@ -339,15 +338,15 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=
     else:
         # 锁屏两段式：① 第一次要锁 → 禁止调工具，只问确认 ② 用户点头 → 这回合强制真锁
         # ③ 岔开话题 → 确认作废。顺序很关键：先看点头，再看要锁，最后才是普通硬路由
-        if PENDING_LOCK[0] and CONFIRM_WORDS.match(user_input.strip()):
-            PENDING_LOCK[0] = False
+        if current().pending_lock[0] and CONFIRM_WORDS.match(user_input.strip()):
+            current().pending_lock[0] = False
             force_tool = {"type": "function", "function": {"name": "lock_screen"}}
             system_msg = system_msg + [{"role": "system", "content": "【本回合强制指令】用户已确认锁屏：立即调用 lock_screen 工具，等工具真实返回结果后按结果回答。"}]
         elif LOCK_HINT.search(user_input):
-            PENDING_LOCK[0] = True
+            current().pending_lock[0] = True
             system_msg = system_msg + [{"role": "system", "content": "【本回合强制指令】用户想锁屏：本回合禁止调用任何工具，先用花卷的口吻问一句确认（比如桌上东西存好了没）。等用户下一回合明确说'确认/锁吧'后再执行。"}]
         else:
-            PENDING_LOCK[0] = False
+            current().pending_lock[0] = False
             hard_tool = detect_hard_tool(user_input)
             if hard_tool:
                 force_tool = {"type": "function", "function": {"name": hard_tool}}
