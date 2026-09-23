@@ -2,7 +2,7 @@
 r"""
 花卷 一键体检 (self_check)
 用法: 在 D:\python 目录下运行   python 体检.py
-功能: 自动跑完全部 23 个工具 + 关键对话链路, 逐个打 ✅/❌, 最后给总分。
+功能: 自动跑完全部 24 个工具 + 关键对话链路, 逐个打 ✅/❌, 最后给总分。
 说明:
   * 会真实调用一次 API(阿里云), 大概花几毛钱、跑 1~2 分钟
   * 测试前自动备份并恢复 数据文件(记账/提醒/记忆/历史/近况/心情/家电等), 不会污染真实数据
@@ -53,7 +53,7 @@ _provider = config.MODEL_PROVIDER
 _is_local = (_provider == "local")
 _t_start = time.time()
 print("=" * 64)
-print("花卷一键体检开始  (23 个工具逐个过)")
+print("花卷一键体检开始  (24 个工具逐个过)")
 print("模型通道: %s" % ("本地模型 OpenVINO + %s (%s)" % (
     os.path.basename(config.LOCAL_MODEL_PATH), config.LOCAL_DEVICE) if _is_local else "云端 阿里云百炼 通义千问"))
 print("=" * 64)
@@ -61,7 +61,7 @@ print("=" * 64)
 # ---------- 1. 工具注册表 ----------
 tool_names = [x["function"]["name"] for x in bot.TOOLS]
 t("工具注册表: TOOLS 与 TOOL_FUNCS 数量一致且无缺失",
-  len(tool_names) == len(bot.TOOL_FUNCS) == 23 and all(n in bot.TOOL_FUNCS for n in tool_names),
+  len(tool_names) == len(bot.TOOL_FUNCS) == 24 and all(n in bot.TOOL_FUNCS for n in tool_names),
   f"{len(tool_names)} 个")
 
 # ---------- 2. 纯离线功能 ----------
