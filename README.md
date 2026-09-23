@@ -3,6 +3,10 @@
 一个能聊天、有长期记忆、会指挥多个子 AI、能真实执行任务的个人 AI 助理。
 核心代码（Function Calling、Agent 编排、RAG 记忆）全部手写实现，**未使用 LangChain 等封装框架**。
 
+> **3 秒看懂**：① 说"查天气/记账/开程序"，它**真的调工具执行**，不是嘴上答应；
+> ② 有**长期记忆**（对话自动入库、每轮现场召回）；③ 能**指挥 4 个子 AI 并行干活**；
+> ④ 自带 **56 项自动化回归**，改一行都知道有没有弄坏。→ 30 秒跑起来见下方「快速开始」。
+
 > ⚠️ 仓库里的 `persona.txt`（个人人设）与 `knowledge_base.txt`（个人知识库）是隐私文件，已被 .gitignore 排除。
 > 克隆后请先执行：
 > ```
@@ -63,8 +67,10 @@ huajuan_files/  文件盒：Agent 可读写的文件目录
 环境：Python 3.10+（Windows），依赖：
 
 ```
-pip install flask requests openai numpy beautifulsoup4 python-dotenv pillow ultralytics opencv-python pypdf
+pip install -r requirements.txt
 ```
+
+> 可选依赖（本地小模型 / YOLO 摄像头 / 浏览器自动化）在 `requirements.txt` 里以注释标出，用到再装。
 
 1. 准备 `persona.txt` 与 `knowledge_base.txt`（见开头说明）
 2. 创建 `.env`：

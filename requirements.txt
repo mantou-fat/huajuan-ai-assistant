@@ -1,0 +1,18 @@
+# 花卷核心依赖（跑 app.py 必需）
+flask
+requests
+openai
+numpy
+beautifulsoup4
+python-dotenv
+pillow
+
+# ---- 可选：本地小模型（走 local_llm.py，用云端模型则不需要）----
+# openvino-genai>=2026.3.1
+
+# ---- 可选：YOLO 摄像头实时检测（tools.py 里的摄像头工具用到才装）----
+# opencv-python
+# ultralytics
+
+# ---- 可选：网页阅读的浏览器自动化（tools.py 里用到时才装）----
+# playwright
