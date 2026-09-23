@@ -102,6 +102,21 @@ r1 = bot.read_file(".env")
 r2 = bot.read_file("__不存在的文件__.txt")
 t("read_file 敏感/不存在被拒", "找不到" in r1 and "找不到" in r2 and ".env" not in r2)
 
+# 生成器三件套（离线：真生成文件，验完即删）
+_tmp = {"pdf": "体检_tmp.pdf", "pptx": "体检_tmp.pptx", "docx": "体检_tmp.docx"}
+_r1 = bot.TOOL_FUNCS["make_pdf"]("# 体检\n\n- 点一\n", title="体检", filename=_tmp["pdf"])
+_ok_pdf = "已生成" in _r1 and os.path.exists(os.path.join("huajuan_files", _tmp["pdf"]))
+_r2 = bot.TOOL_FUNCS["make_ppt"]("# 体检\n\n- 点一\n", title="体检", filename=_tmp["pptx"])
+_ok_ppt = "已生成" in _r2 and os.path.exists(os.path.join("huajuan_files", _tmp["pptx"]))
+_r3 = bot.TOOL_FUNCS["make_docx"]("# 体检\n\n- 点一\n", title="体检", filename=_tmp["docx"])
+_ok_docx = "已生成" in _r3 and os.path.exists(os.path.join("huajuan_files", _tmp["docx"]))
+t("生成器: make_pdf 真生成 PDF", _ok_pdf, _r1)
+t("生成器: make_ppt 真生成 PPTX", _ok_ppt, _r2)
+t("生成器: make_docx 真生成 Word", _ok_docx, _r3)
+for _f in _tmp.values():
+    _p = os.path.join("huajuan_files", _f)
+    if os.path.exists(_p): os.remove(_p)
+
 # 提醒/删除记忆/家电 边界
 bot.save_reminders([{"time": "2000-01-01 00:00", "content": "过期"}])
 due = bot.check_reminders()
