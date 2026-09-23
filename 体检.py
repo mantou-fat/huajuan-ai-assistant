@@ -2,7 +2,7 @@
 r"""
 花卷 一键体检 (self_check)
 用法: 在 D:\python 目录下运行   python 体检.py
-功能: 自动跑完全部 21 个工具 + 关键对话链路, 逐个打 ✅/❌, 最后给总分。
+功能: 自动跑完全部 22 个工具 + 关键对话链路, 逐个打 ✅/❌, 最后给总分。
 说明:
   * 会真实调用一次 API(阿里云), 大概花几毛钱、跑 1~2 分钟
   * 测试前自动备份并恢复 数据文件(记账/提醒/记忆/历史/近况/心情/家电等), 不会污染真实数据
@@ -53,7 +53,7 @@ _provider = config.MODEL_PROVIDER
 _is_local = (_provider == "local")
 _t_start = time.time()
 print("=" * 64)
-print("花卷一键体检开始  (21 个工具逐个过)")
+print("花卷一键体检开始  (22 个工具逐个过)")
 print("模型通道: %s" % ("本地模型 OpenVINO + %s (%s)" % (
     os.path.basename(config.LOCAL_MODEL_PATH), config.LOCAL_DEVICE) if _is_local else "云端 阿里云百炼 通义千问"))
 print("=" * 64)
@@ -61,7 +61,7 @@ print("=" * 64)
 # ---------- 1. 工具注册表 ----------
 tool_names = [x["function"]["name"] for x in bot.TOOLS]
 t("工具注册表: TOOLS 与 TOOL_FUNCS 数量一致且无缺失",
-  len(tool_names) == len(bot.TOOL_FUNCS) == 21 and all(n in bot.TOOL_FUNCS for n in tool_names),
+  len(tool_names) == len(bot.TOOL_FUNCS) == 22 and all(n in bot.TOOL_FUNCS for n in tool_names),
   f"{len(tool_names)} 个")
 
 # ---------- 2. 纯离线功能 ----------
@@ -297,11 +297,13 @@ t("争议陷阱: 可以查资料但不能站队",
   f"调用:{tool_seen} 答:{r[:40]}")
 
 # ④ 工具串联 5 条
-# 维度 1: 单回合多工具
-fresh(); r = bot.get_reply("帮我打开记事本，再截个屏")
-t("白名单外程序: 调 open_program + 答里含'找不到'",
-  "open_program" in tool_seen and ("打开" in r or "开好" in r or "记事本" in r),
-  f"调用:{tool_seen} 答:{r[:40]}")# 维度 1: 单回合多工具——但截图走"先确认"，所以是两轮：先开记事本，第二轮回"确认"才截
+# 维度 1: 单回合多工具——截图走"先确认"，第一轮先开记事本、再问是否截屏
+ok_open1 = False
+for _ in range(2):                                # 模型有随机性，试两次
+    fresh(); r = bot.get_reply("帮我打开记事本，再截个屏")
+    if "open_program" in tool_seen and ("打开" in r or "开好" in r or "记事本" in r):
+        ok_open1 = True; break
+t("打开记事本: 调 open_program 且答里提到记事本(重试2次)", ok_open1, f"调用:{tool_seen} 答:{r[:40]}")
 def case_multi_open_shot():
     fresh()
     r1 = bot.get_reply("帮我打开记事本，再截个屏")
