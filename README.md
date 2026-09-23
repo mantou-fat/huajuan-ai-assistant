@@ -86,6 +86,15 @@ pip install -r requirements.txt
 
 > 可选依赖（本地小模型 / YOLO 摄像头 / 浏览器自动化）在 `requirements.txt` 里以注释标出，用到再装。
 
+**Windows 一键安装**：双击 `setup.bat`（装依赖 + 复制人设/知识库模板 + 提示配 `.env`）。
+
+> **只想体验「Markdown → PDF / PPT / Word」？不需要任何 API 密钥**，装好依赖直接：
+> ```
+> python gen_pdf.py  out.pdf   in.md
+> python gen_ppt.py  out.pptx  in.md
+> python gen_docx.py out.docx  in.md
+> ```
+
 1. 准备 `persona.txt` 与 `knowledge_base.txt`（见开头说明）
 2. 创建 `.env`：
 
