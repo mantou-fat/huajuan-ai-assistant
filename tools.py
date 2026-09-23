@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""工具层：22 个工具 + TOOLS 登记表 + TOOL_FUNCS 派遣表 + 工具相关状态 + TTS。
+"""工具层：23 个工具 + TOOLS 登记表 + TOOL_FUNCS 派遣表 + 工具相关状态 + TTS。
 依赖 config(配置) / llm(客户端) / rag(知识库检索)。工具只负责"干活"，编排逻辑在 bot.py。"""
 import os
 import json
@@ -370,6 +370,22 @@ TOOLS = [
         }
     }
 },
+{
+    "type": "function",
+    "function": {
+        "name": "make_ppt",
+        "description": "把 markdown 文本排成一份 PPT，保存到文件盒（huajuan_files/）。用户说'把…做成PPT/做份幻灯片/生成PPT'时使用。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "md": {"type": "string", "description": "要排版的 markdown 全文；# 一级标题做封面/章节，## 二级标题做分节，- 列表做要点"},
+                "title": {"type": "string", "description": "PPT 标题，可留空（留空自动取正文第一个 # 标题）"},
+                "filename": {"type": "string", "description": "输出 PPT 文件名，如 demo.pptx"}
+            },
+            "required": ["md"]
+        }
+    }
+},
 ]
 def get_time():
     from datetime import datetime
@@ -598,6 +614,25 @@ def make_pdf(md, title="", filename="huajuan_output.pdf"):
         return "已生成 PDF「" + filename + "」到文件盒，共 " + str(n) + " 页"
     except Exception as e:
         return "生成 PDF 失败：" + str(e)
+def make_ppt(md, title="", filename="huajuan_output.pptx"):
+    """把 markdown 排成 PPTX，输出到文件盒。返回结果字符串。"""
+    if not filename.lower().endswith(".pptx"):
+        filename += ".pptx"
+    path = safe_write_path(filename)
+    if path is None:
+        return "输出名不合法，只能写到文件盒 huajuan_files 里"
+    try:
+        from gen_ppt import md_to_ppt
+        if not title:
+            title = "花卷演示"
+            for line in md.splitlines():
+                s = line.strip()
+                if s.startswith("# "):
+                    title = s[2:].strip(); break
+        n = md_to_ppt(path, md.splitlines(), title=title)
+        return "已生成 PPT「" + filename + "」到文件盒，共 " + str(n) + " 页"
+    except Exception as e:
+        return "生成 PPT 失败：" + str(e)
 def set_reminder(remind_time, content):
     try:
         from datetime import datetime
@@ -747,7 +782,8 @@ TOOL_FUNCS = {
     "dispatch_agent": dispatch_agent,
     "look_around": look_around,
     "control_device": control_device,
-    "make_pdf": make_pdf
+    "make_pdf": make_pdf,
+    "make_ppt": make_ppt
 }
 def tts(text, filename="tts_latest.wav"):
     """文字转语音：长文本自动切成小段分别合成，再拼接成一个 wav"""
