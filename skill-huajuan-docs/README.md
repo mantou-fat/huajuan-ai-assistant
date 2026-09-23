@@ -22,6 +22,12 @@ python scripts/run.py example/example.md
 # 3. 打开 output/ 看结果
 ```
 
+**验证这包是好的**（3 项全 PASS 才是验过的）：
+
+```bash
+python selfcheck.py
+```
+
 ## 它能排什么
 
 - 标题/章节、项目符号/编号、真表格、代码块、加粗、行内代码、分页
