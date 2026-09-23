@@ -20,6 +20,7 @@
 
 - 📄 生成的 PDF：**[demo/demo.pdf](demo/demo.pdf)**（GitHub 上可直接预览第一页）
 - 📊 生成的 PPT：**[demo/demo.pptx](demo/demo.pptx)**
+- 📝 生成的 Word：**[demo/demo.docx](demo/demo.docx)**
 
 同一套生成器，可复现：
 

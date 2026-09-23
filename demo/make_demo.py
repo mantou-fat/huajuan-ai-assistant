@@ -6,6 +6,7 @@ import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from gen_pdf import md_to_pdf
 from gen_ppt import md_to_ppt
+from gen_docx import md_to_docx
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 md = open(os.path.join(HERE, "demo.md"), encoding="utf-8").read().splitlines()
@@ -27,5 +28,8 @@ for line in md:
     slides.append(line)
 n_ppt = md_to_ppt(os.path.join(HERE, "demo.pptx"), slides, title="STM32 光照闭环实验报告")
 
+n_docx = md_to_docx(os.path.join(HERE, "demo.docx"), md, title="STM32 光照闭环实验报告")
+
 print("demo.pdf  共 %d 页" % n_pdf)
 print("demo.pptx 共 %d 页" % n_ppt)
+print("demo.docx 共 %d 段" % n_docx)
