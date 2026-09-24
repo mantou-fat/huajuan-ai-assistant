@@ -7,7 +7,7 @@ import queue
 import threading 
 from concurrent.futures import ThreadPoolExecutor  # 第3课：多手下并行干活靠它
 from sessions import current
-from lang_quality import check_typos, check_redline
+from lang_quality import check_typos, check_redline, check_typos_llm
 import requests
 import base64
 from openai import OpenAI
@@ -271,8 +271,10 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=
     current().phone_actions.clear()
     with chat_lock:  # 防止多线程并发时 messages 串话
         user_msg = user_input
-        # 错别字识别：认出用户打的别字，按正字理解，回复自然（别当面挑用户错字）
+        # 错别字识别：先词典(免费快)再 LLM(认词典外的)，认出后按正字理解，回复自然（别当面挑用户错字）
         _typos = check_typos(user_msg)
+        if not _typos:
+            _typos = check_typos_llm(user_msg)
         if _typos:
             user_msg += "\n\n【用户错别字】" + "、".join(_typos) + "（按正字理解，回复自然即可）"
         # 知识题硬性兜底：命中关键词就强制检索并注入资料，模型没有"不查"的选项

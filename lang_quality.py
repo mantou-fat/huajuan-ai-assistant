@@ -28,3 +28,26 @@ def check_redline(text):
 def check_typos(text):
     """返回文本里发现的错别字（形如 '决对→绝对'），空 = 没发现"""
     return [w + "→" + c for w, c in TYPO.items() if w in text]
+
+
+def check_typos_llm(text):
+    """用 LLM 认错别字：词典认不出的也能认。返回 ['错字→正字', ...]，空=无；失败静默返回 []。"""
+    try:
+        from llm import client
+        resp = client.chat.completions.create(
+            model="qwen-plus",
+            messages=[{"role": "user", "content": (
+                "找出下面这句话里真正的错别字（同音/形近写错的），给出完整的词。"
+                "例：'觉的'应写作'觉得'、'严俊'应写作'严峻'、'己经'应写作'已经'。"
+                "只报真正的错别字，别挑网络用语、方言、缩写。"
+                "输出格式：完整错词→正确词，多个用英文逗号分隔；没有就只回两个字：无\n\n" + text[:200]
+            )}],
+            temperature=0,
+            max_tokens=50,
+        )
+        raw = resp.choices[0].message.content.strip()
+        if not raw or raw == "无":
+            return []
+        return [x.strip() for x in raw.replace("，", ",").split(",") if "→" in x]
+    except Exception:
+        return []   # 认错别字失败绝不能影响主流程
