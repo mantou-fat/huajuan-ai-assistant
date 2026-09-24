@@ -264,6 +264,20 @@ def audit_log(action, args, result, ok=True):
                 }, ensure_ascii=False) + "\n")
     except Exception:
         pass    # 审计失败绝不能影响主流程
+def think_about(user_msg):
+    """先想一步：一句话说清用户真实意图 + 回复要注意的点。失败静默返回空串。"""
+    try:
+        resp = client.chat.completions.create(
+            model="qwen-plus",
+            messages=[{"role": "user", "content": (
+                "分析下面这句话：用户真正想要什么、有没有反话/潜台词/歧义、回复时要注意什么。"
+                "用一句话总结，不超过40字，直接给结论，别客套。\n\n" + user_msg[:200]
+            )}],
+            temperature=0, max_tokens=60,
+        )
+        return resp.choices[0].message.content.strip()
+    except Exception:
+        return ""
 def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=None):
     """输入问题，返回回答。print_stream=True 时边生成边打印（命令行用）"""
     # 防御：接口传进来的不一定是字符串
@@ -313,6 +327,10 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=
     summary = load_summary()
     if summary.get("summary"):
             system_msg = system_msg + [{"role": "system", "content": "更早对话的摘要：\n" + summary["summary"]}]
+    # 先想一步：注入本轮意图分析，让主模型回复前先理解用户（像人一样思考）
+    _think = think_about(user_msg)
+    if _think:
+        system_msg = system_msg + [{"role": "system", "content": "【先想一步】" + _think}]
     non_system = [m for m in messages if m["role"] != "system"]
                 # RAG 记忆召回：每轮按当前问题现场检索，只带相关的，用完即扔不进 history
     # 召回失败（如接口临时出错）不能弄崩整轮聊天：降级成"没召回"继续聊
