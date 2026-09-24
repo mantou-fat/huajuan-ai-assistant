@@ -7,6 +7,7 @@ import queue
 import threading 
 from concurrent.futures import ThreadPoolExecutor  # 第3课：多手下并行干活靠它
 from sessions import current
+from lang_quality import check_typos, check_redline
 import requests
 import base64
 from openai import OpenAI
@@ -270,6 +271,10 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=
     current().phone_actions.clear()
     with chat_lock:  # 防止多线程并发时 messages 串话
         user_msg = user_input
+        # 错别字识别：认出用户打的别字，按正字理解，回复自然（别当面挑用户错字）
+        _typos = check_typos(user_msg)
+        if _typos:
+            user_msg += "\n\n【用户错别字】" + "、".join(_typos) + "（按正字理解，回复自然即可）"
         # 知识题硬性兜底：命中关键词就强制检索并注入资料，模型没有"不查"的选项
                 # 知识题两级路由：强词直接注入；弱词让 LLM 复核是不是真查资料（救活 is_knowledge_question）
         kb_level = knowledge_hit_level(user_msg)
@@ -475,6 +480,10 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=
     # 整轮审计：这次对话调过哪些工具、几轮、成败（_turn 条目）
     audit_log("_turn", {"input": user_input[:50], "tools": turn_tools, "rounds": steps},
               "ok" if not failed else "failed", ok=not failed)
+    # 红线自检：回复不能带金额/联系方式/脏话，命中就记审计告警（下一步再接自动重写）
+    _hits = check_redline(full_reply)
+    if _hits:
+        audit_log("红线", {"命中": _hits}, full_reply[:80], ok=False)
     return full_reply
 print("ai智能机器人已启用（输入 exit 退出，输入 add 添加知识）\n")
 messages = current().messages
