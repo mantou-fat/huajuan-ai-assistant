@@ -331,6 +331,10 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=
     _think = think_about(user_msg)
     if _think:
         system_msg = system_msg + [{"role": "system", "content": "【先想一步】" + _think}]
+    # 干活模式：这轮是"干活"（硬路由到工具），回复就简短工具腔，别撒娇、别加戏、别翻记录凑字
+    if detect_hard_tool(user_input):
+        system_msg = system_msg + [{"role": "system", "content":
+            "【干活模式】这轮是正事，回复要短：一句话说清结果或进度，别撒娇、别加戏、别翻聊天记录凑字。"}]
     non_system = [m for m in messages if m["role"] != "system"]
                 # RAG 记忆召回：每轮按当前问题现场检索，只带相关的，用完即扔不进 history
     # 召回失败（如接口临时出错）不能弄崩整轮聊天：降级成"没召回"继续聊

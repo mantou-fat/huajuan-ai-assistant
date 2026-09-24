@@ -1,10 +1,12 @@
 from flask import Flask, request, jsonify, send_file, Response, json, redirect
 from html import escape as html_escape   # 转义文本，防 XSS
-from bot import get_reply, clear_history, load_memory, load_status, get_greeting, delete_memory, load_mood,tts,user_location,check_reminders,expense_summary,PHONE_ACTIONS,control_device
+from bot import get_reply, clear_history, load_memory, load_status, get_greeting, delete_memory, load_mood,tts,check_reminders,expense_summary,control_device
 import queue
 import threading
 import os
 import hmac
+from sessions import current
+from config import FILES_DIR
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024   # 请求体上限 10MB：挡住超大请求打爆内存/API
 # ============ 访问保护：在 .env 里配好 ACCESS_TOKEN 后，谁都要带钥匙才能进 ============
@@ -263,6 +265,8 @@ HTML = """
   <button onclick="send()">发送</button>
   <button onclick="document.getElementById('imgInput').click()">📷</button>
   <input type="file" id="imgInput" accept="image/*" style="display:none" onchange="pickImg(event)">
+  <button onclick="document.getElementById('fileInput').click()">📎</button>
+  <input type="file" id="fileInput" style="display:none" onchange="pickFile(event)">
   <button id="micBtn" onclick="toggleMic()">🎤</button>
 
     <button id="voiceBtn" onclick="toggleVoice()">🔈</button>
@@ -286,6 +290,17 @@ HTML = """
         );
     }
   let selectedImg = null;   // 记住当前选的图，没选就是 null
+
+  function pickFile(event) {
+    const f = event.target.files[0];
+    if (!f) return;
+    const fd = new FormData();
+    fd.append('file', f);
+    fetch('/upload', {method: 'POST', body: fd})
+      .then(r => r.json())
+      .then(d => addMsg('已上传文件：' + (d.name || f.name) + '（在文件盒，可让花卷读取或转成PDF）', 'user'))
+      .catch(() => addMsg('文件上传失败', 'user'));
+  }
 
   function pickImg(event) {
     const file = event.target.files[0];
@@ -665,15 +680,15 @@ def index():
 @app.route("/location", methods=["POST"])
 def receive_location():
     data = request.get_json()
-    user_location["lat"] = data.get("lat")
-    user_location["lon"] = data.get("lon")
-    print("收到定位：", user_location)
+    current().location["lat"] = data.get("lat")
+    current().location["lon"] = data.get("lon")
+    print("收到定位：", current().location)
     return jsonify({"ok": True})
 @app.route("/chat", methods=["POST"])
 def chat_api():
     data = request.get_json()
     reply = get_reply(data.get("message", ""))
-    return jsonify({"reply": reply, "action": PHONE_ACTIONS or None})
+    return jsonify({"reply": reply, "action": current().phone_actions or None})
 @app.route("/clear", methods=["POST"])
 def clear_api():
     clear_history()
@@ -698,6 +713,16 @@ def memory_delete_api():
     data = request.get_json()
     delete_memory(data.get("index", -1))
     return jsonify({"ok": True})
+@app.route("/upload", methods=["POST"])
+def upload_file():
+    f = request.files.get("file")
+    if not f or not f.filename:
+        return jsonify({"error": "没有文件"}), 400
+    name = os.path.basename(f.filename)   # 防路径穿越
+    if not name:
+        return jsonify({"error": "文件名不合法"}), 400
+    f.save(os.path.join(FILES_DIR, name))
+    return jsonify({"ok": True, "name": name})
 @app.route("/greet")
 def greet_api():
     return jsonify({"greeting": get_greeting()})
