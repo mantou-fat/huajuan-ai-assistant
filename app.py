@@ -392,8 +392,15 @@ HTML = """
     if (autoPlay) {
       const ttsData = await ttsPromise;
       if (ttsData && ttsData.audio_url) {
+        isSpeaking = true;                       // 花卷开口了，先别收音
         const audio = new Audio(ttsData.audio_url);
+        audio.onended = function() {             // 说完再继续听（豆包式接力）
+          isSpeaking = false;
+          if (voiceMode) setTimeout(startListening, 200);
+        };
         audio.play().catch(function(err) {
+          isSpeaking = false;
+          if (voiceMode) setTimeout(startListening, 200);
           console.log('TTS 播放失败:', err);
         });
       }
@@ -555,32 +562,68 @@ HTML = """
     }
     const recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
     recognition.lang = 'zh-CN';
-    recognition.interimResults = true;
-    recognition.continuous = false;
+    recognition.interimResults = true;   // 边说边出字（实时回显，转译感≈1秒）
+    recognition.continuous = true;       // 连续听，不说完一次就断
 
-    let listening = false;
+    let voiceMode = false;   // 🎤 总开关：开=连续语音对话（像豆包）
+    let listening = false;   // 当前是否在收音
+    let isSpeaking = false;  // 花卷正在放声音（这时先不收音，免得听到自己）
+
+    function updateMicBtn() {
+      const b = document.getElementById('micBtn');
+      b.textContent = voiceMode ? '🎙️' : '🎤';
+      b.title = voiceMode ? '语音对话：开（点一下关）' : '语音对话：关（点一下开）';
+    }
+
+    function startListening() {
+      if (!voiceMode || listening || isSpeaking) return;
+      try { recognition.start(); listening = true; } catch (e) {}
+      updateMicBtn();
+    }
+
+    function stopListening() {
+      try { recognition.stop(); } catch (e) {}
+      listening = false;
+    }
 
     function toggleMic() {
-    if (listening) {
-        recognition.stop();
-    } else {
-        recognition.start();
-        listening = true;
-        micBtn.textContent = '🎙️';
-    }
+      voiceMode = !voiceMode;
+      if (voiceMode) {
+        if (!autoPlay) { autoPlay = true; localStorage.setItem('autoplay', '1'); updateVoiceBtn(); }  // 语音对话默认让花卷开口回话
+        startListening();
+      } else {
+        stopListening();
+      }
+      updateMicBtn();
     }
 
     recognition.onresult = function (e) {
-    let text = '';
-    for (let i = 0; i < e.results.length; i++) {
-        text += e.results[i][0].transcript;
-    }
-    document.getElementById('msg').value = text;
+      let finalText = '';
+      let interim = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const r = e.results[i];
+        if (r.isFinal) finalText += r[0].transcript;
+        else interim += r[0].transcript;
+      }
+      if (finalText.trim()) {
+        // 说完了 → 自动发送，不用再点「发送」
+        document.getElementById('msg').value = '';
+        sendText(finalText.trim(), null);
+      } else if (interim) {
+        document.getElementById('msg').value = interim;   // 边说边实时回显
+      }
+    };
+
+    recognition.onerror = function () {
+      listening = false;
+      if (voiceMode) setTimeout(startListening, 500);   // 出错也自动续听
+      updateMicBtn();
     };
 
     recognition.onend = function () {
-    listening = false;
-    micBtn.textContent = '🎤';
+      listening = false;
+      if (voiceMode && !isSpeaking) setTimeout(startListening, 300);  // 豆包式接力：说完自动接着听
+      updateMicBtn();
     };
     let currentMood = '';   // 花卷当前的心情文字
 
