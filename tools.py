@@ -149,7 +149,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": r"读取文件盒里某个文件的内容。用户想看某个文件写了什么时必须调用本工具读取实时内容，即使对话中见过该文件的内容也不许凭记忆背诵。只接受文件名如 心愿清单.txt，不接受带路径的写法,可以读文件盒和项目文件夹（D:\python）里的文件",
+            "description": r"读取文件盒里某个文件的内容。用户想看某个文件写了什么时必须调用本工具读取实时内容，即使对话中见过该文件的内容也不许凭记忆背诵。只接受文件名如 心愿清单.txt，不接受带路径的写法；支持 txt/md/json/csv/pdf/docx/xlsx/pptx/图片等多种格式，可以读文件盒和项目文件夹（D:\python）里的文件",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -526,7 +526,13 @@ def generate_song(theme):
         filename = "song_" + hashlib.md5(theme.encode()).hexdigest()[:8] + ".mp3"
         with open(os.path.join("static", filename), "wb") as f:
             f.write(song_resp.content)
-        return "唱好了！播放地址：/static/" + filename + "\n【必须】你在回复里要原样带上这个播放地址 /static/" + filename + "，用户点它才能听；不许省略、不许换成'给你听'这种空话。"
+        # 第4步：歌词也存一份到文件盒，否则以后用户要歌词只能瞎编（之前的 bug 就在这）
+        lyric_name = "歌词_" + filename[:-4] + ".txt"
+        with open(os.path.join(FILES_DIR, lyric_name), "w", encoding="utf-8") as f:
+            f.write(lyrics)
+        return ("唱好了！播放地址：/static/" + filename + "\n"
+                "这首歌的歌词如下（原样记住，用户要歌词就念这份，一个字都不许另写或瞎编）：\n" + lyrics + "\n"
+                "【必须】回复里原样带上播放地址 /static/" + filename + "；并告诉用户歌词已存进文件盒「" + lyric_name + "」，以后要歌词就 read_file 读这个文件。")
     except Exception as e:
         return "唱歌失败：" + str(e)
 def read_webpage_browser(url):
@@ -577,20 +583,108 @@ def list_files():
         return "\n".join(lines)
     except Exception as e:
         return "列文件失败：" + str(e)
+def _read_image_text(path):
+    """图片走视觉模型：描述画面 + 抄出图里的文字"""
+    ext = os.path.splitext(path)[1].lower().lstrip(".")
+    mime = {"jpg": "jpeg", "jpeg": "jpeg", "png": "png", "webp": "webp",
+            "gif": "gif", "bmp": "bmp"}.get(ext, "jpeg")
+    with open(path, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode()
+    resp = client.chat.completions.create(
+        model="qwen-vl-max",
+        messages=[{"role": "user", "content": [
+            {"type": "text", "text": "请描述这张图片的内容，图里有文字就把文字尽量完整抄出来。用中文，简洁直接。"},
+            {"type": "image_url", "image_url": {"url": "data:image/" + mime + ";base64," + b64}},
+        ]}],
+        max_tokens=1200,
+    )
+    return resp.choices[0].message.content.strip()
+
+def _extract_file_text(path):
+    """按扩展名读文件：pdf/docx/xlsx/pptx/图片走专用解析，其余按纯文本读"""
+    ext = os.path.splitext(path)[1].lower()
+    if ext in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}:
+        try:
+            return _read_image_text(path)
+        except Exception as e:
+            return "图片识别失败：" + str(e)
+    if ext == ".pdf":
+        try:
+            from pypdf import PdfReader
+            r = PdfReader(path)
+            pages = []
+            for i, pg in enumerate(r.pages):
+                t = (pg.extract_text() or "").strip()
+                if t:
+                    pages.append("【第%d页】\n%s" % (i + 1, t))
+            text = "\n\n".join(pages).strip()
+            if not text:
+                return "这份 PDF 里提取不到文字（多半是扫描件/图片型 PDF）。你把关键页拍成图片用📷发我，或转成图片再传。"
+            return text
+        except Exception as e:
+            return "读 PDF 失败：" + str(e)
+    if ext == ".docx":
+        try:
+            import docx
+            d = docx.Document(path)
+            parts = [p.text for p in d.paragraphs if p.text.strip()]
+            for tb in d.tables:
+                for row in tb.rows:
+                    cells = [c.text.strip() for c in row.cells]
+                    if any(cells):
+                        parts.append(" | ".join(cells))
+            return "\n".join(parts) if parts else "（这份 Word 里没有文字内容）"
+        except Exception as e:
+            return "读 Word 失败：" + str(e)
+    if ext == ".xlsx":
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(path, data_only=True)
+            lines = []
+            for ws in wb.worksheets:
+                lines.append("【工作表：%s】" % ws.title)
+                for row in ws.iter_rows(values_only=True):
+                    cells = ["" if c is None else str(c) for c in row]
+                    if any(x.strip() for x in cells):
+                        lines.append(" | ".join(cells))
+                lines.append("")
+            return "\n".join(lines).strip() if lines else "（这份表格是空的）"
+        except Exception as e:
+            return "读 Excel 失败：" + str(e)
+    if ext == ".pptx":
+        try:
+            from pptx import Presentation
+            prs = Presentation(path)
+            lines = []
+            for i, slide in enumerate(prs.slides):
+                lines.append("【第%d页】" % (i + 1))
+                for shape in slide.shapes:
+                    if shape.has_text_frame:
+                        t = shape.text_frame.text.strip()
+                        if t:
+                            lines.append(t)
+                lines.append("")
+            return "\n".join(lines).strip() if lines else "（这份 PPT 里没有文字）"
+        except Exception as e:
+            return "读 PPT 失败：" + str(e)
+    # 默认按纯文本读（txt/md/json/csv/py/log 等）
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except Exception as e:
+        return "读文件失败：" + str(e)
+
 def read_file(filename):
     path = safe_read_path(filename)
     if path is None:
         return "找不到能读的「" + filename + "」。我只能读授权清单里的文件，敏感文件一律不给看"
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            text = f.read()
-        if len(text) > 3000:
-            text = text[:3000] + "\n...（文件太长，只取了前3000字）"
-        return text
-    except FileNotFoundError:
-        return "文件盒里没有叫「" + filename + "」的文件"
+        text = _extract_file_text(path)
     except Exception as e:
         return "读文件失败：" + str(e)
+    if text and len(text) > 6000:
+        text = text[:6000] + "\n...（文件太长，只取了前6000字。用户想细看某段，就再 read_file 或直接问）"
+    return text if text else "（文件是空的）"
 def write_file(filename, content, confirm=False):
     path = safe_write_path(filename)
     if path is None:

@@ -109,6 +109,9 @@ def detect_hard_tool(text):
         return "make_docx"
     if re.search(r"唱(个|首|一?首)?歌|来(个|首)?歌|写(个|首)?歌|唱一?首", text):
         return "generate_song"
+    # ---- 读文件：说"上传了文件/读一下某文件"就强制走 read_file，读真实内容（防嘴上说读了实际没读）----
+    if re.search(r"上传了文件|我上传了|刚上传|上传了.{0,3}文件", text):
+        return "read_file"
     return None
 # 不锁死工具、但注入强指令的两类：设提醒/闹钟、文件盒操作（防止模型嘴上说做了/凭记忆编文件名）
 REMINDER_HINT = re.compile(r"提醒我|提醒一下|设个提醒|设一个提醒|设个闹钟|闹钟")

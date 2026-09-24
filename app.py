@@ -248,7 +248,7 @@ HTML = """
 <body>
   <div class = "app">
   <div class = "header">
-    <span>🥐 花卷 <small style="color:#999;font-size:12px">v2.2</small></span>
+    <span>🥐 花卷 <small style="color:#e67e22;font-size:13px;font-weight:bold">v2.2</small></span>
     <span class="header-btns">
       <button onclick="clearChat()">清空</button>
       <button onclick="showMemory()">记忆</button>
@@ -298,7 +298,10 @@ HTML = """
     fd.append('file', f);
     fetch('/upload', {method: 'POST', body: fd})
       .then(r => r.json())
-      .then(d => addMsg('已上传文件：' + (d.name || f.name) + '（在文件盒，可让花卷读取或转成PDF）', 'user'))
+      .then(d => {
+        const name = d.name || f.name;
+        sendText('我上传了文件：' + name + '，你读一下，说说里面写了什么，我接下来告诉你拿它做什么', null);
+      })
       .catch(() => addMsg('文件上传失败', 'user'));
   }
 
@@ -327,6 +330,10 @@ HTML = """
   const imgToSend = selectedImg;                 // 先把图接住，再清状态
   selectedImg = null;
   document.getElementById('previewArea').style.display = 'none';
+  sendText(msg, imgToSend);
+}
+
+  async function sendText(msg, imgToSend) {
   addMsg(msg, 'user');
   const typing = addMsg('●●●', 'ai');          // 占位气泡（先保持打点动画）
   const typingBubble = typing.querySelector('.ai');
