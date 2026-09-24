@@ -248,7 +248,7 @@ HTML = """
 <body>
   <div class = "app">
   <div class = "header">
-    <span>🥐 花卷</span>
+    <span>🥐 花卷 <small style="color:#999;font-size:12px">v2.2</small></span>
     <span class="header-btns">
       <button onclick="clearChat()">清空</button>
       <button onclick="showMemory()">记忆</button>
