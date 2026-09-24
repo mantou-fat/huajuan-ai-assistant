@@ -339,7 +339,7 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=
                 # RAG 记忆召回：每轮按当前问题现场检索，只带相关的，用完即扔不进 history
     # 召回失败（如接口临时出错）不能弄崩整轮聊天：降级成"没召回"继续聊
     try:
-        recalled = retrieve_memory(user_input, k=3, threshold=0.55)
+        recalled = retrieve_memory(user_input, k=3)
     except Exception:
         recalled = []
     if recalled:

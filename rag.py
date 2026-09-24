@@ -78,22 +78,76 @@ def cosine_similarity(a, b):
     if na == 0 or nb == 0:
         return 0.0
     return np.dot(a, b) / (na * nb)
-def top_k_search(query, k=3, threshold=0.35):
-    """相似度低于 threshold 的知识直接丢弃，返回可能为空列表"""
+
+def _char_bigrams(text):
+    """中文按字符二元组、英文按字母二元组切，纯本地零成本的字面信号"""
+    text = re.sub(r"[^\u4e00-\u9fa5A-Za-z0-9]", "", str(text).lower())
+    return {text[i:i + 2] for i in range(len(text) - 1)}
+
+def _tokens(text):
+    """抽出长度>=2的字母数字词（英文术语/缩写/代码标识符），用于精确命中"""
+    return {t for t in re.findall(r"[A-Za-z0-9]{2,}", str(text).lower())}
+
+def lexical_score(query, doc):
+    """字面重叠分（0~1）：字符 bigram 的 F1 + 精确词命中的加成。纯本地，零 API 成本"""
+    qb, db = _char_bigrams(query), _char_bigrams(doc)
+    if not qb or not db:
+        base = 0.0
+    else:
+        inter = len(qb & db)
+        recall = inter / len(qb)
+        precision = inter / len(db)
+        base = (2 * recall * precision / (recall + precision)) if (recall + precision) else 0.0
+    qt, dt = _tokens(query), _tokens(doc)
+    if qt and dt:
+        hit = len(qt & dt) / len(qt)
+        base = base + (1 - base) * hit * 0.5
+    return min(base, 1.0)
+
+def hybrid_score(query, doc, q_vec, d_vec, alpha=0.65):
+    """语义(向量) + 字面(关键词) 加权融合。alpha 越大越偏语义，默认 0.65"""
+    return alpha * cosine_similarity(q_vec, d_vec) + (1 - alpha) * lexical_score(query, doc)
+
+def top_k_search(query, k=3, threshold=0.30, alpha=0.65, diversity=0.88):
+    """混合检索：向量+字面加权 → 相对动态阈值 → MMR 去重。
+    相对阈值 floor = max(绝对下限 threshold, 最高分*0.45)，比写死一个数更稳
+    （不同问题的分数分布不一样）；MMR 把跟已选结果太像的跳过，保证结果多样不重复。"""
     if not knowledge_base:
         return []
     query_vec = get_embedding([query])[0]
     kb_vecs = get_kb_embeddings()
-    sims = [(i, cosine_similarity(query_vec, v)) for i, v in enumerate(kb_vecs)]
-    sims.sort(key=lambda x: x[1], reverse=True)
-    results = []
-    for i, score in sims:
-        if score >= threshold and len(results) < k:
-            results.append(knowledge_base[i])
-    return results
+    scored = [(i, hybrid_score(query, knowledge_base[i], query_vec, v, alpha))
+              for i, v in enumerate(kb_vecs)]
+    scored.sort(key=lambda x: x[1], reverse=True)
+    if not scored:
+        return []
+    floor = max(threshold, scored[0][1] * 0.45)
+    picked = []
+    for i, score in scored:
+        if score < floor or len(picked) >= k:
+            break
+        if any(cosine_similarity(kb_vecs[i], kb_vecs[j]) > diversity for j, _ in picked):
+            continue
+        picked.append((i, score))
+    return [knowledge_base[i] for i, _ in picked]
+
+def debug_retrieval(query, k=5):
+    """算法调试用：返回 top-k 的 (文本, 综合分, 向量分, 字面分)，方便看分数调参"""
+    if not knowledge_base:
+        return []
+    query_vec = get_embedding([query])[0]
+    kb_vecs = get_kb_embeddings()
+    rows = []
+    for i, v in enumerate(kb_vecs):
+        cos = cosine_similarity(query_vec, v)
+        lex = lexical_score(query, knowledge_base[i])
+        rows.append((knowledge_base[i], hybrid_score(query, knowledge_base[i], query_vec, v), cos, lex))
+    rows.sort(key=lambda x: x[1], reverse=True)
+    return rows[:k]
+
 def search_knowledge(query):
     """调用工具，查本地知识库"""
-    results = top_k_search(query, k=3, threshold=0.35)
+    results = top_k_search(query, k=3)
     if not results:
         return "知识库里没找到相关内容"
     return "\n\n".join(results)

@@ -6,9 +6,10 @@ import json
 from config import MEMORY_FILE, VEC_CACHE_FILE, MEMORY_MERGE_EVERY
 from sessions import current
 from llm import client
-from rag import get_embedding, cosine_similarity
+from rag import get_embedding, cosine_similarity, hybrid_score
 
-def retrieve_memory(query, k=4, threshold=0.35):
+def retrieve_memory(query, k=4, threshold=0.30):
+    """记忆召回：混合检索(向量+字面) + 相对动态阈值，比纯余弦更稳"""
     mem = load_memory()
     if not mem:
         return []
@@ -30,13 +31,18 @@ def retrieve_memory(query, k=4, threshold=0.35):
             except OSError as e:
                 print("向量缓存写盘失败（不影响功能）：", e)
         current().mem_embeddings = emb
-    query_vec = get_embedding([query[:2000]])[0]
-    sims = [(i, cosine_similarity(query_vec, v)) for i, v in enumerate(emb)]
-    sims.sort(key=lambda x: x[1], reverse=True)
+    q = query[:2000]
+    query_vec = get_embedding([q])[0]
+    scored = [(i, hybrid_score(q, mem[i], query_vec, v)) for i, v in enumerate(emb)]
+    scored.sort(key=lambda x: x[1], reverse=True)
+    if not scored:
+        return []
+    floor = max(threshold, scored[0][1] * 0.45)
     results = []
-    for i, score in sims:
-        if score >= threshold and len(results) < k:
-            results.append(mem[i])
+    for i, score in scored:
+        if score < floor or len(results) >= k:
+            break
+        results.append(mem[i])
     return results
 def load_memory():
     try:
