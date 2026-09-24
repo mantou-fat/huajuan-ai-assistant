@@ -417,7 +417,12 @@ HTML = """
 
       const bubble = document.createElement('div');   // 气泡
       bubble.className = cls;
-      bubble.textContent = text;
+      const m = text.match(/\/static\/[^\s"'<>]+\.mp3/);
+      if (m) {
+        bubble.innerHTML = esc(text) + '<br><audio controls src="' + esc(m[0]) + '" style="margin-top:6px"></audio>';
+      } else {
+        bubble.textContent = text;
+      }
         // 拼装：用户行是 气泡+头像，AI行是 头像+气泡（注意顺序）
       if (cls === 'user') {
         row.appendChild(bubble);

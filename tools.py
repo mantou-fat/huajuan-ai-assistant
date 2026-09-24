@@ -526,7 +526,7 @@ def generate_song(theme):
         filename = "song_" + hashlib.md5(theme.encode()).hexdigest()[:8] + ".mp3"
         with open(os.path.join("static", filename), "wb") as f:
             f.write(song_resp.content)
-        return "唱好了！播放地址：/static/" + filename
+        return "唱好了！播放地址：/static/" + filename + "\n【必须】你在回复里要原样带上这个播放地址 /static/" + filename + "，用户点它才能听；不许省略、不许换成'给你听'这种空话。"
     except Exception as e:
         return "唱歌失败：" + str(e)
 def read_webpage_browser(url):
