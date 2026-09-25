@@ -131,8 +131,9 @@ def top_k_search(query, k=3, threshold=0.30, alpha=0.65, diversity=0.88):
         picked.append((i, score))
     return [knowledge_base[i] for i, _ in picked]
 
-def debug_retrieval(query, k=5):
-    """算法调试用：返回 top-k 的 (文本, 综合分, 向量分, 字面分)，方便看分数调参"""
+def debug_retrieval(query, k=5, alpha=0.65):
+    """算法调试用：返回 top-k 的 (文本, 综合分, 向量分, 字面分)，方便看分数调参。
+    alpha 是混合权重：越大越信语义(向量)，越小越信字面(关键词)"""
     if not knowledge_base:
         return []
     query_vec = get_embedding([query])[0]
@@ -141,7 +142,7 @@ def debug_retrieval(query, k=5):
     for i, v in enumerate(kb_vecs):
         cos = cosine_similarity(query_vec, v)
         lex = lexical_score(query, knowledge_base[i])
-        rows.append((knowledge_base[i], hybrid_score(query, knowledge_base[i], query_vec, v), cos, lex))
+        rows.append((knowledge_base[i], hybrid_score(query, knowledge_base[i], query_vec, v, alpha), cos, lex))
     rows.sort(key=lambda x: x[1], reverse=True)
     return rows[:k]
 
