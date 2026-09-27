@@ -1,15 +1,14 @@
 # -*- coding: utf-8 -*-
-"""应届生求职筛选助手 MVP v0.1
+"""应届生求职筛选助手 MVP v0.2
 流程：填条件(城市/专业/薪资/应届) → 实时搜索 → qwen 筛选+结构化 → 输出清单。
-定位：实时"搜+筛"的智能工具，不是招聘数据库（不存数据，绕开数据壁垒）。
-复用 llm 的 client + tavily_key，和花卷同一套密钥。"""
+提速：加载动画 + 减少输入输出 + 用 qwen-turbo（更快；要更准可换回 qwen-plus）。"""
 import requests
-from flask import Flask, request, render_template_string
+from flask import Flask, request, render_template_string, jsonify
 from llm import client, tavily_key
 
 app = Flask(__name__)
 
-def search(query, n=10):
+def search(query, n=6):
     """Tavily 实时搜索，返回结构化结果列表 [{title,url,content}]"""
     try:
         r = requests.post(
@@ -25,7 +24,7 @@ def search(query, n=10):
 def filter_jobs(city, major, salary, fresh, raw_results):
     """把原始搜索结果塞给 qwen，筛出真实、对口、可投递的公司清单"""
     blob = "\n\n".join(
-        "[%d] %s\n%s\n%s" % (i, item.get("title", ""), item.get("url", ""), item.get("content", ""))
+        "[%d] %s\n%s\n%s" % (i, item.get("title", ""), item.get("url", ""), (item.get("content") or "")[:400])
         for i, item in enumerate(raw_results, 1)
     )
     prompt = (
@@ -33,15 +32,15 @@ def filter_jobs(city, major, salary, fresh, raw_results):
         "下面是联网搜到的原始结果。请从中筛出【真实、对口、可投递】的公司/岗位，"
         "剔除广告、培训贷、中介、无关内容和重复项。\n\n%s\n\n"
         "输出格式（每条一行，用 | 分隔）：公司名|岗位|官网或投递链接|匹配理由|薪资范围\n"
-        "只输出清单本身，不要解释、不要标题，最多15条。若没有符合的，就输出：没找到符合的岗位。"
+        "只输出清单本身，不要解释、不要标题，最多10条。若没有符合的，就输出：没找到符合的岗位。"
         % (city, major, salary, fresh, blob)
     )
     try:
         resp = client.chat.completions.create(
-            model="qwen-plus",
+            model="qwen-turbo",   # 快；要更准可换 qwen-plus
             messages=[{"role": "user", "content": prompt}],
             temperature=0.2,
-            max_tokens=1500,
+            max_tokens=900,
         )
         return resp.choices[0].message.content.strip()
     except Exception as e:
@@ -59,37 +58,57 @@ input,select{width:100%;max-width:420px;padding:9px;font-size:15px;border:1px so
 button{margin-top:20px;padding:10px 26px;font-size:16px;background:#1a73e8;color:#fff;border:none;border-radius:6px;cursor:pointer}
 button:hover{background:#1557b0}
 pre{white-space:pre-wrap;word-wrap:break-word;background:#f6f8fa;border:1px solid #e1e4e8;border-radius:8px;padding:16px;font-size:14px;line-height:1.6;font-family:inherit}
+#loading{display:none;margin-top:16px;color:#1a73e8;font-size:14px}
 </style></head>
 <body>
 <div class="card">
 <h1>🎯 应届生求职筛选助手</h1>
-<form method="post">
-  <label>城市</label><input name="city" placeholder="如：南宁 / 深圳" value="{{city}}">
-  <label>专业 / 方向</label><input name="major" placeholder="如：自动化 / Python / 嵌入式" value="{{major}}">
-  <label>期望薪资</label><input name="salary" placeholder="如：6k-10k / 面议" value="{{salary}}">
+<form id="f">
+  <label>城市</label><input name="city" placeholder="如：南宁 / 深圳">
+  <label>专业 / 方向</label><input name="major" placeholder="如：自动化 / Python / 嵌入式">
+  <label>期望薪资</label><input name="salary" placeholder="如：6k-10k / 面议">
   <label>身份</label><select name="fresh"><option>应届</option><option>往届</option></select>
   <br><button type="submit">帮我筛</button>
 </form>
-{% if result %}
-<h2 style="font-size:16px;color:#333">筛选结果</h2>
-<pre>{{result}}</pre>
-{% endif %}
+<div id="loading">⏳ 正在搜索 + 筛选中，稍等几秒…</div>
+<div id="result"></div>
 </div>
+<script>
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+document.getElementById('f').addEventListener('submit', function(e){
+  e.preventDefault();
+  const fd = new FormData(this);
+  document.getElementById('loading').style.display='block';
+  document.getElementById('result').innerHTML='';
+  fetch('/search', {method:'POST', body:fd})
+    .then(r=>r.json())
+    .then(d=>{
+      document.getElementById('loading').style.display='none';
+      document.getElementById('result').innerHTML='<pre>'+esc(d.result)+'</pre>';
+    })
+    .catch(err=>{
+      document.getElementById('loading').style.display='none';
+      document.getElementById('result').innerHTML='<pre>出错了：'+err+'</pre>';
+    });
+});
+</script>
 </body></html>"""
 
-@app.route("/", methods=["GET", "POST"])
+@app.route("/")
 def index():
-    city = major = salary = fresh = ""
-    result = None
-    if request.method == "POST":
-        city = request.form.get("city", "").strip()
-        major = request.form.get("major", "").strip()
-        salary = request.form.get("salary", "").strip()
-        fresh = request.form.get("fresh", "应届")
-        if city and major:
-            raw = search("%s %s 应届生 校招 招聘" % (city, major), 10)
-            result = filter_jobs(city, major, salary, fresh, raw)
-    return render_template_string(HTML, city=city, major=major, salary=salary, fresh=fresh, result=result)
+    return render_template_string(HTML)
+
+@app.route("/search", methods=["POST"])
+def search_api():
+    city = request.form.get("city", "").strip()
+    major = request.form.get("major", "").strip()
+    salary = request.form.get("salary", "").strip()
+    fresh = request.form.get("fresh", "应届")
+    if not city or not major:
+        return jsonify({"result": "请填写城市和专业/方向"})
+    raw = search("%s %s 应届生 校招 招聘" % (city, major), 6)
+    result = filter_jobs(city, major, salary, fresh, raw)
+    return jsonify({"result": result})
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5001, debug=False)
