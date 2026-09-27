@@ -4,7 +4,7 @@
 所以必须留在本文件里（global 才有意义）。"""
 import json
 import time
-from config import MEMORY_FILE, VEC_CACHE_FILE, MEMORY_MERGE_EVERY, MEMORY_HALF_LIFE_DAYS
+from config import MEMORY_FILE, VEC_CACHE_FILE, MEMORY_MERGE_EVERY, MEMORY_HALF_LIFE_DAYS, MEMORY_CONSOLIDATE_AT
 from sessions import current
 from llm import client
 from rag import get_embedding, cosine_similarity, hybrid_score
@@ -170,6 +170,49 @@ def merge_memory(threshold=0.70):
         save_memory(result)
         return result
     return mem
+def consolidate_memory():
+    """记忆整理：记忆攒多了，让模型把相关的归纳成更高级结论，删重复和琐碎。
+    少于 MEMORY_CONSOLIDATE_AT 条不动；失败静默返回原样，绝不崩主流程。"""
+    mem = load_memory()
+    if len(mem) < MEMORY_CONSOLIDATE_AT:
+        return mem
+    texts = _mem_texts(mem)
+    prompt = ("下面是花卷记住的关于用户的事，共%d条。请把它们归纳整理：\n"
+        "1. 把相关的合并成一条更高级的结论（例：'爱喝冰可乐'+'爱吃辣' → '口味偏重，爱碳酸饮料和辣食'）；\n"
+        "2. 删掉重复的和鸡毛蒜皮的；\n"
+        "3. 重要的具体信息（生日、约定、偏好）要保留。\n"
+        "每条一行，格式：'事实|重要性'，重要性1~10（10=极其重要）。只输出整理后的清单，不要解释、不要编号。\n\n"
+        % len(mem) + "\n".join(texts))
+    resp = client.chat.completions.create(
+        model="qwen-plus",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0,
+        max_tokens=600,
+    )
+    raw = (resp.choices[0].message.content or "").strip()
+    if not raw:
+        return mem
+    now = _now()
+    new_mem = []
+    for line in raw.split("\n"):
+        line = line.strip().lstrip("-•· ").strip()
+        if not line:
+            continue
+        fact, imp = line, 0.5
+        if "|" in line:
+            left, _, right = line.partition("|")
+            fact = left.strip()
+            try:
+                imp = max(0.0, min(1.0, float(right.strip()) / 10.0))
+            except ValueError:
+                imp = 0.5
+        if fact:
+            new_mem.append({"t": fact, "i": imp, "last": now})
+    if new_mem:
+        save_memory(new_mem)
+        return new_mem
+    return mem
+
 def maybe_merge_memory():
     """记忆新增攒够 N 条就全库去重合并一次；失败静默，绝不打断对话"""
     cur_len = current().last_merge_len
@@ -182,6 +225,10 @@ def maybe_merge_memory():
             merge_memory()          # 内部会 save_memory + 清向量缓存
         except Exception as e:
             print("记忆合并失败(不影响功能):", e)
+        try:
+            consolidate_memory()    # 条数够多就归纳整理（内部有阈值，不够自动跳过）
+        except Exception as e:
+            print("记忆整理失败(不影响功能):", e)
         mem = current().mem
         mem[:] = load_memory()      # 同步内存里的 mem，防止下次追加把合并结果覆盖回去
         current().last_merge_len = len(mem)
