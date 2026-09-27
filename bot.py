@@ -22,7 +22,7 @@ from config import (REMINDER_FILE, KNOWLEDGE_FILE, HISTORY_FILE, MEMORY_FILE, VE
 # 规则引擎搬家：纯规则函数从 rules.py 读（重构第二步，行为零变化）
 from rules import (clean_aside, looks_like_vision, knowledge_hit_level, detect_hard_tool,
                    parse_remind_time, REMINDER_HINT, FILEBOX_HINT, LOCK_HINT,
-                   CONFIRM_WORDS, REMINDER_EDIT_HINT, COT_HINT)
+                   CONFIRM_WORDS, REMINDER_EDIT_HINT, COT_HINT, PLAN_HINT)
 from dotenv import load_dotenv
 # 共享资源与 RAG 搬家（重构第三步，行为零变化）
 from llm import client, api_key, tavily_key, bjs_key, workspace_id
@@ -278,6 +278,24 @@ def think_about(user_msg):
         return resp.choices[0].message.content.strip()
     except Exception:
         return ""
+def plan_steps(user_msg):
+    """多步任务：先让模型拆成步骤清单，主流程照着清单一步步执行（Plan-and-Execute 的 Plan 半）。
+    失败静默返回空串，绝不因为规划失败弄崩整轮聊天。"""
+    try:
+        resp = client.chat.completions.create(
+            model="qwen-plus",
+            messages=[{"role": "user", "content": (
+                "用户要你做这件事：" + user_msg + "\n"
+                "请把它拆成一份执行步骤清单，每步一行，用'1. 2. 3.'编号，每步写清楚要做什么。"
+                "只输出步骤清单本身，不要解释、不要开始执行、不要客套。"
+            )}],
+            temperature=0,
+            max_tokens=200,
+        )
+        return resp.choices[0].message.content.strip()
+    except Exception:
+        return ""
+
 def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=None):
     """输入问题，返回回答。print_stream=True 时边生成边打印（命令行用）"""
     # 防御：接口传进来的不一定是字符串
@@ -339,6 +357,12 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=
     if COT_HINT.search(user_input):
         system_msg = system_msg + [{"role": "system", "content":
             "【本回合强制指令】这题需要推理/计算：请先列出步骤（1. 2. 3.），再给最终答案。禁止直接跳答案、禁止只给结论不写过程。"}]
+    # Plan-and-Execute：多步任务先规划出施工图，再让工具循环照着一步步执行
+    if PLAN_HINT.search(user_input):
+        _plan = plan_steps(user_msg)
+        if _plan:
+            system_msg = system_msg + [{"role": "system", "content":
+                "【施工图】这是多步任务，请按下面的步骤清单逐步完成：每完成一步，就根据上一步的真实结果决定下一步（该调工具就调工具，禁止只用嘴说'已做完'）。\n" + _plan}]
     non_system = [m for m in messages if m["role"] != "system"]
                 # RAG 记忆召回：每轮按当前问题现场检索，只带相关的，用完即扔不进 history
     # 召回失败（如接口临时出错）不能弄崩整轮聊天：降级成"没召回"继续聊
