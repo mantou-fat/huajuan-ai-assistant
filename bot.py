@@ -296,6 +296,27 @@ def plan_steps(user_msg):
     except Exception:
         return ""
 
+def reflect_on_reply(user_input, reply):
+    """反思：挑自己回答的毛病。有问题返回问题描述，没问题返回空串。失败静默返回空串，绝不崩主流程。"""
+    try:
+        resp = client.chat.completions.create(
+            model="qwen-plus",
+            messages=[{"role": "user", "content": (
+                "用户的问题：" + user_input + "\n"
+                "花卷的回答：" + reply + "\n"
+                "请挑毛病：这个回答有没有编造事实、漏掉用户要求、或和常识自相矛盾？"
+                "如果没问题，只回复两个字'无问题'；如果有问题，用一句话说清哪里错、该怎么改。"
+            )}],
+            temperature=0,
+            max_tokens=120,
+        )
+        verdict = resp.choices[0].message.content.strip()
+        if verdict and verdict != "无问题" and "无问题" not in verdict:
+            return verdict
+        return ""
+    except Exception:
+        return ""
+
 def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=None):
     """输入问题，返回回答。print_stream=True 时边生成边打印（命令行用）"""
     # 防御：接口传进来的不一定是字符串
@@ -513,6 +534,23 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=
     full_reply = clean_aside(full_reply)
         # 删掉旁白后可能留下行首行尾多余空格和空行
     full_reply = "\n".join(line.strip() for line in full_reply.split("\n") if line.strip())
+    # Reflexion 自我反思：这轮动过工具/是计算规划题 → 答完自检一遍，发现问题就带反馈重写一次
+    if not failed and (turn_tools or COT_HINT.search(user_input) or PLAN_HINT.search(user_input)):
+        _critique = reflect_on_reply(user_input, full_reply)
+        if _critique:
+            messages.append({"role": "assistant", "content": full_reply})
+            messages.append({"role": "user", "content": "【自我反思】你刚的回答有问题：" + _critique + "。请重新回答，改正这个问题。"})
+            try:
+                r2 = create_stream(messages, on_text=None, model="qwen-plus", tool_choice="none")
+                new_reply = (r2.get("content") or "").strip()
+                if new_reply:
+                    full_reply = clean_aside(new_reply)
+                    full_reply = "\n".join(line.strip() for line in full_reply.split("\n") if line.strip())
+            except Exception:
+                pass
+            if len(messages) >= 2:
+                messages.pop()
+                messages.pop()
     messages.append({"role": "assistant", "content": full_reply})
         # 请求失败时不再白跑记忆/心情两次 API，直接存盘返回
     if not failed:
