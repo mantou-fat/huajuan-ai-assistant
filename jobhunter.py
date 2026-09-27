@@ -22,6 +22,24 @@ def search(query, n=6):
     except Exception as e:
         return [{"title": "搜索失败", "url": "", "content": str(e)}]
 
+def search_multi(city, major):
+    """多路搜索：用几个不同关键词各搜一遍，按 URL 去重合并，覆盖更全。"""
+    queries = [
+        "%s %s 应届生 校招 招聘" % (city, major),
+        "%s %s 招聘 岗位 本科" % (city, major),
+    ]
+    seen = set()
+    merged = []
+    for q in queries:
+        for item in search(q, 8):
+            url = item.get("url", "")
+            if url and url in seen:
+                continue
+            if url:
+                seen.add(url)
+            merged.append(item)
+    return merged
+
 def _parse_json(text):
     """从模型输出里抠出 JSON 数组：直接解析失败就截 [..] 再试。"""
     text = (text or "").strip()
@@ -50,7 +68,7 @@ def filter_jobs(city, major, salary, fresh, raw_results):
         "剔除广告、培训贷、中介、无关内容和重复项。\n\n%s\n\n"
         "输出严格的 JSON 数组，每个元素是对象，键为 company/job/url/reason/salary，例如：\n"
         '[{"company":"公司名","job":"岗位","url":"官网或投递链接","reason":"匹配理由","salary":"薪资范围"}]\n'
-        "只输出这个 JSON 数组本身，不要任何其他文字、不要解释、不要 markdown 代码块。最多10条。"
+        "只输出这个 JSON 数组本身，不要任何其他文字、不要解释、不要 markdown 代码块。最多20条。"
         % (city, major, salary, fresh, blob)
     )
     try:
@@ -58,7 +76,7 @@ def filter_jobs(city, major, salary, fresh, raw_results):
             model="qwen-turbo",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.2,
-            max_tokens=900,
+            max_tokens=1400,
         )
         return _parse_json(resp.choices[0].message.content)
     except Exception:
@@ -140,7 +158,7 @@ def search_api():
     fresh = request.form.get("fresh", "应届")
     if not city or not major:
         return jsonify({"items": []})
-    raw = search("%s %s 应届生 校招 招聘" % (city, major), 6)
+    raw = search_multi(city, major)
     items = filter_jobs(city, major, salary, fresh, raw)
     return jsonify({"items": items or []})
 
