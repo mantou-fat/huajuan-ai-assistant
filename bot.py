@@ -22,7 +22,7 @@ from config import (REMINDER_FILE, KNOWLEDGE_FILE, HISTORY_FILE, MEMORY_FILE, VE
 # 规则引擎搬家：纯规则函数从 rules.py 读（重构第二步，行为零变化）
 from rules import (clean_aside, looks_like_vision, knowledge_hit_level, detect_hard_tool,
                    parse_remind_time, REMINDER_HINT, FILEBOX_HINT, LOCK_HINT,
-                   CONFIRM_WORDS, REMINDER_EDIT_HINT)
+                   CONFIRM_WORDS, REMINDER_EDIT_HINT, COT_HINT)
 from dotenv import load_dotenv
 # 共享资源与 RAG 搬家（重构第三步，行为零变化）
 from llm import client, api_key, tavily_key, bjs_key, workspace_id
@@ -335,6 +335,10 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=
     if detect_hard_tool(user_input):
         system_msg = system_msg + [{"role": "system", "content":
             "【干活模式】这轮是正事，回复要短：一句话说清结果或进度，别撒娇、别加戏、别翻聊天记录凑字。"}]
+    # CoT 思维链：计算/推理题强制一步步列步骤，防模型直接跳答案
+    if COT_HINT.search(user_input):
+        system_msg = system_msg + [{"role": "system", "content":
+            "【本回合强制指令】这题需要推理/计算：请先列出步骤（1. 2. 3.），再给最终答案。禁止直接跳答案、禁止只给结论不写过程。"}]
     non_system = [m for m in messages if m["role"] != "system"]
                 # RAG 记忆召回：每轮按当前问题现场检索，只带相关的，用完即扔不进 history
     # 召回失败（如接口临时出错）不能弄崩整轮聊天：降级成"没召回"继续聊
