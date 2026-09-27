@@ -150,10 +150,12 @@ def clear_history():
         save_history(messages)
         print("对话历史已清空。")
 def extract_memory(user_input, reply):
-    """从这段记忆中提取长期记忆的事情，没有就返回空"""
+    """从这段对话提取长期记忆（事实 + 重要性），没有就返回 None。
+    返回 {"t": 事实, "i": 重要性0~1}，重要性高的事（喜好/约定/生日）以后优先被召回。"""
     prompt = ("下面是用户和你的对话。请只提取'关于用户的、值得长期记住的事实'，"
-        "比如喜好、生日、约定、经历。如果有，用一句话、第三人称说出来（如：馒头怕打雷）。"
-        "没有就只回复两个字：无\n\n"
+        "比如喜好、生日、约定、经历。如果有，输出格式：'事实|重要性'，重要性用1到10的整数"
+        "（10=极其重要如生日/重大约定，1=鸡毛蒜皮）。例如：'馒头怕打雷|8'。"
+        "没有值得记的就只回复两个字：无\n\n"
         f"用户：{user_input}\n花卷：{reply}"
     )
     resp = client.chat.completions.create(
@@ -162,10 +164,20 @@ def extract_memory(user_input, reply):
         temperature=0,
         max_tokens=100
     )
-    facts = resp.choices[0].message.content.strip()
-    if facts and facts != "无":
-        return facts
-    return ""
+    raw = (resp.choices[0].message.content or "").strip()
+    if not raw or raw == "无":
+        return None
+    fact, imp = raw, 0.5
+    if "|" in raw:
+        left, _, right = raw.partition("|")
+        fact = left.strip()
+        try:
+            imp = max(0.0, min(1.0, float(right.strip()) / 10.0))
+        except ValueError:
+            imp = 0.5
+    if not fact:
+        return None
+    return {"t": fact, "i": imp}
 def load_summary():
     try:
         with open(current().file("summary"), "r", encoding="utf-8") as f:
@@ -224,7 +236,6 @@ def after_reply_jobs(user_input, full_reply):
         new = extract_memory(user_input, full_reply)
         if new and not is_duplicate(new, mem):
             mem.append(new)
-            save_memory(mem)
             save_memory(mem)
             maybe_merge_memory()      # ← 加这行：新增记忆后检查是否该合并
         # 2. 心情会流动

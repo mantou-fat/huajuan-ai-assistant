@@ -9,10 +9,12 @@ from llm import client
 from rag import get_embedding, cosine_similarity, hybrid_score
 
 def retrieve_memory(query, k=4, threshold=0.30):
-    """记忆召回：混合检索(向量+字面) + 相对动态阈值，比纯余弦更稳"""
+    """记忆召回：混合检索(向量+字面) × 重要性加权 + 相对动态阈值。
+    重要的事（喜好/约定/生日）即使相似度略低也往前排；鸡毛蒜皮被压后。"""
     mem = load_memory()
     if not mem:
         return []
+    texts = _mem_texts(mem)
     emb = current().mem_embeddings
     if emb is None:
         disk_cache = None
@@ -21,10 +23,10 @@ def retrieve_memory(query, k=4, threshold=0.30):
                 disk_cache = json.load(f)
         except (FileNotFoundError, json.JSONDecodeError):
             pass
-        if disk_cache is not None and len(disk_cache) == len(mem):
+        if disk_cache is not None and len(disk_cache) == len(texts):
             emb = disk_cache
         else:
-            emb = get_embedding(mem)
+            emb = get_embedding(texts)
             try:
                 with open(current().file("vec_cache"), "w", encoding="utf-8") as f:
                     json.dump(emb, f)
@@ -33,7 +35,11 @@ def retrieve_memory(query, k=4, threshold=0.30):
         current().mem_embeddings = emb
     q = query[:2000]
     query_vec = get_embedding([q])[0]
-    scored = [(i, hybrid_score(q, mem[i], query_vec, v)) for i, v in enumerate(emb)]
+    scored = []
+    for i, v in enumerate(emb):
+        base = hybrid_score(q, texts[i], query_vec, v)
+        imp = mem[i].get("i", 0.5) if isinstance(mem[i], dict) else 0.5
+        scored.append((i, base * (0.4 + 0.6 * imp)))   # 重要性加权：缩放 0.4~1.0 倍
     scored.sort(key=lambda x: x[1], reverse=True)
     if not scored:
         return []
@@ -42,14 +48,26 @@ def retrieve_memory(query, k=4, threshold=0.30):
     for i, score in scored:
         if score < floor or len(results) >= k:
             break
-        results.append(mem[i])
+        results.append(texts[i])
     return results
 def load_memory():
     try:
         with open(current().file("memory"), "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return []
+    # 迁移：老格式是纯字符串，统一包成 {"t": 文本, "i": 重要性0~1}（默认0.5中性）
+    out = []
+    for m in data:
+        if isinstance(m, dict) and "t" in m:
+            out.append({"t": m["t"], "i": float(m.get("i", 0.5))})
+        else:
+            out.append({"t": str(m), "i": 0.5})
+    return out
+
+def _mem_texts(mem):
+    """从记忆列表里抽出纯文本（用于 embedding 和返回给模型）"""
+    return [m["t"] if isinstance(m, dict) else str(m) for m in mem]
 
 def save_memory(memory):
     current().mem_embeddings = None   # 记忆变了，向量缓存作废（原来是 global _mem_embeddings = None）
@@ -71,8 +89,9 @@ def is_duplicate(new_fact, existing_memories, threshold=0.75):
     """检查新提取的记忆是否已经存在于现有记忆中"""
     if not existing_memories:
         return False
-    all_memories = existing_memories + [new_fact]
-    embeddings = get_embedding(all_memories)
+    new_text = new_fact["t"] if isinstance(new_fact, dict) else str(new_fact)
+    texts = _mem_texts(existing_memories) + [new_text]
+    embeddings = get_embedding(texts)
     new_vec = embeddings[-1]
     for vec in embeddings[:-1]:
         if cosine_similarity(new_vec, vec) >= threshold:
@@ -97,7 +116,8 @@ def merge_memory(threshold=0.70):
     mem = load_memory()
     if len(mem) < 2:
         return mem
-    vecs = get_embedding(mem)
+    texts = _mem_texts(mem)
+    vecs = get_embedding(texts)
     to_remove = set()
     for i in range(len(mem)):
         if i in to_remove:
@@ -107,9 +127,11 @@ def merge_memory(threshold=0.70):
                 continue
             if cosine_similarity(vecs[i], vecs[j]) < threshold:
                 continue
-            verdict = judge_merge(mem[i], mem[j])
+            verdict = judge_merge(texts[i], texts[j])
             if verdict and verdict != "否":
-                mem[i] = verdict
+                # 合并后保留两条里更高的重要性
+                hi = max(mem[i].get("i", 0.5), mem[j].get("i", 0.5))
+                mem[i] = {"t": verdict, "i": hi}
                 to_remove.add(j)
     if to_remove:
         result = [m for idx, m in enumerate(mem) if idx not in to_remove]

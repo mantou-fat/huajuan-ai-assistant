@@ -762,7 +762,9 @@ def mood_api():
     return jsonify(load_mood())
 @app.route("/memory")
 def memory_api():
-    return jsonify(load_memory())
+    mems = load_memory()
+    # 前端展示只需要文本；dict 里还带重要性分，这里只吐文本
+    return jsonify([m["t"] if isinstance(m, dict) else str(m) for m in mems])
 @app.route("/memory/delete", methods=["POST"])
 def memory_delete_api():
     data = request.get_json()
