@@ -177,7 +177,7 @@ def extract_memory(user_input, reply):
             imp = 0.5
     if not fact:
         return None
-    return {"t": fact, "i": imp}
+    return {"t": fact, "i": imp, "last": time.strftime("%Y-%m-%d %H:%M:%S")}
 def load_summary():
     try:
         with open(current().file("summary"), "r", encoding="utf-8") as f:

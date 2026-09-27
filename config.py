@@ -22,6 +22,7 @@ EXCLUDE_FILES = [".env"]
 # ---- 对话参数 ----
 MAX_MESSAGES = 20
 MEMORY_MERGE_EVERY = 5
+MEMORY_HALF_LIFE_DAYS = 30   # 遗忘曲线半衰期：30天不提，记忆权重减半
 # ---- 模型通道：cloud=阿里云百炼(默认) / local=本机模型 ----
 # 改 .env 里一行 MODEL_PROVIDER=local 就能切成本地模型，云端本地双通道
 try:

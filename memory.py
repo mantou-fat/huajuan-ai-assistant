@@ -3,14 +3,32 @@
 状态归属：mem 是列表（共享同一对象）；_mem_embeddings、_last_merge_len 会被重新赋值，
 所以必须留在本文件里（global 才有意义）。"""
 import json
-from config import MEMORY_FILE, VEC_CACHE_FILE, MEMORY_MERGE_EVERY
+import time
+from config import MEMORY_FILE, VEC_CACHE_FILE, MEMORY_MERGE_EVERY, MEMORY_HALF_LIFE_DAYS
 from sessions import current
 from llm import client
 from rag import get_embedding, cosine_similarity, hybrid_score
 
+def _now():
+    return time.strftime("%Y-%m-%d %H:%M:%S")
+
+def _decay(last_str):
+    """遗忘曲线：距上次想起越久，权重越低。半衰期 MEMORY_HALF_LIFE_DAYS 天。"""
+    if not last_str:
+        return 1.0
+    try:
+        from datetime import datetime
+        last = datetime.strptime(last_str, "%Y-%m-%d %H:%M:%S")
+        days = (datetime.now() - last).total_seconds() / 86400.0
+        if days < 0:
+            days = 0
+        return 0.5 ** (days / MEMORY_HALF_LIFE_DAYS)
+    except Exception:
+        return 1.0
+
 def retrieve_memory(query, k=4, threshold=0.30):
-    """记忆召回：混合检索(向量+字面) × 重要性加权 + 相对动态阈值。
-    重要的事（喜好/约定/生日）即使相似度略低也往前排；鸡毛蒜皮被压后。"""
+    """记忆召回：混合检索 × 重要性加权 × 遗忘衰减 + 相对动态阈值。
+    重要的事往前排；久不提的事按遗忘曲线衰减；被想起一次就刷新时间（用进废退）。"""
     mem = load_memory()
     if not mem:
         return []
@@ -39,16 +57,29 @@ def retrieve_memory(query, k=4, threshold=0.30):
     for i, v in enumerate(emb):
         base = hybrid_score(q, texts[i], query_vec, v)
         imp = mem[i].get("i", 0.5) if isinstance(mem[i], dict) else 0.5
-        scored.append((i, base * (0.4 + 0.6 * imp)))   # 重要性加权：缩放 0.4~1.0 倍
+        decay = _decay(mem[i].get("last", "")) if isinstance(mem[i], dict) else 1.0
+        scored.append((i, base * (0.4 + 0.6 * imp) * decay))   # 重要性 × 遗忘衰减
     scored.sort(key=lambda x: x[1], reverse=True)
     if not scored:
         return []
     floor = max(threshold, scored[0][1] * 0.45)
     results = []
+    recalled_idx = []
     for i, score in scored:
         if score < floor or len(results) >= k:
             break
         results.append(texts[i])
+        recalled_idx.append(i)
+    # 召回即强化：被想起的记忆刷新"上次想起时间"，遗忘衰减从头算
+    if recalled_idx:
+        now = _now()
+        changed = False
+        for i in recalled_idx:
+            if isinstance(mem[i], dict) and mem[i].get("last") != now:
+                mem[i]["last"] = now
+                changed = True
+        if changed:
+            save_memory(mem)
     return results
 def load_memory():
     try:
@@ -56,13 +87,14 @@ def load_memory():
             data = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return []
-    # 迁移：老格式是纯字符串，统一包成 {"t": 文本, "i": 重要性0~1}（默认0.5中性）
+    # 迁移：老格式是纯字符串，统一包成 {"t": 文本, "i": 重要性, "last": 上次想起时间}
+    now = _now()
     out = []
     for m in data:
         if isinstance(m, dict) and "t" in m:
-            out.append({"t": m["t"], "i": float(m.get("i", 0.5))})
+            out.append({"t": m["t"], "i": float(m.get("i", 0.5)), "last": m.get("last", now)})
         else:
-            out.append({"t": str(m), "i": 0.5})
+            out.append({"t": str(m), "i": 0.5, "last": now})
     return out
 
 def _mem_texts(mem):
