@@ -146,9 +146,39 @@ def debug_retrieval(query, k=5, alpha=0.65):
     rows.sort(key=lambda x: x[1], reverse=True)
     return rows[:k]
 
+def hyde_query(query):
+    """HyDE：让模型脑补一段"理想答案"，拿答案去检索（答案和知识库更像）。失败返回空串。"""
+    try:
+        resp = client.chat.completions.create(
+            model="qwen-plus",
+            messages=[{"role": "user", "content": (
+                "针对下面的问题，写一段简短的参考答案（120字内，直接陈述答案本身，不要客套、不要重复问题）：\n" + query
+            )}],
+            temperature=0.3,
+            max_tokens=200,
+        )
+        return resp.choices[0].message.content.strip()
+    except Exception:
+        return ""
+
+def search_knowledge_smart(query, k=3):
+    """智能检索：先直接搜；搜不到再 HyDE 脑补答案补搜一次，合并去重。"""
+    direct = top_k_search(query, k=k)
+    if direct:
+        return direct
+    hyde = hyde_query(query)
+    if not hyde:
+        return direct
+    via_hyde = top_k_search(hyde, k=k)
+    merged = list(direct)
+    for x in via_hyde:
+        if x not in merged:
+            merged.append(x)
+    return merged[:k]
+
 def search_knowledge(query):
-    """调用工具，查本地知识库"""
-    results = top_k_search(query, k=3)
+    """调用工具，查本地知识库（先直接搜，搜不到 HyDE 补搜）"""
+    results = search_knowledge_smart(query, k=3)
     if not results:
         return "知识库里没找到相关内容"
     return "\n\n".join(results)
