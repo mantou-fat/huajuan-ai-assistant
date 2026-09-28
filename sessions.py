@@ -13,6 +13,7 @@ import os
 import re
 import threading
 import time
+import contextvars
 
 from config import (HISTORY_FILE, MEMORY_FILE, VEC_CACHE_FILE, STATUS_FILE, MOOD_FILE,
                     EXPENSE_FILE, REMINDER_FILE, HOME_FILE, SUMMARY_FILE, SEEN_FILE)
@@ -20,7 +21,7 @@ from config import (HISTORY_FILE, MEMORY_FILE, VEC_CACHE_FILE, STATUS_FILE, MOOD
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 DATA_ROOT = os.path.join(PROJECT_ROOT, "data")   # 多用户的数据都放这儿，一个用户一个子目录
 DEFAULT_SID = "default"                          # 单用户模式用的 sid（也是老文件的主人）
-SID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,32}$")   # 只允许字母数字下划线连字符
+SID_PATTERN = re.compile(r"^[^\\/:*?\"<>|.\x00-\x1f]{1,32}$")   # 允许中文/字母数字/下划线连字符，禁止路径分隔符和点(防目录穿越)
 
 # 文件名映射：值全部来自 config，避免"同一个文件名写两遍"（这项目吃过重复定义的亏）
 FILE_MAP = {
@@ -40,6 +41,8 @@ class Session:
         self.sid = sid
         self.legacy = legacy          # True=老文件（项目根目录，相对路径），单用户模式专用
         self.dir = PROJECT_ROOT if legacy else os.path.join(DATA_ROOT, sid)
+        if not legacy:
+            os.makedirs(self.dir, exist_ok=True)   # 新用户第一次存数据前先建好目录
         # 文件路径：legacy 模式就是现在那几个相对路径（和 config 常量一模一样）
         self.files = {k: (v if legacy else os.path.join(self.dir, v)) for k, v in FILE_MAP.items()}
         self.lock = threading.RLock()          # 每个用户一把锁：A 聊天不堵 B
@@ -148,9 +151,19 @@ class SessionStore:
 store = SessionStore()          # 全局唯一的会话仓库（它自己线程安全，不是"用户状态"）
 
 
-def current(sid=DEFAULT_SID):
-    """取（必要时创建）某个用户的会话——上层最常用的入口"""
-    return store.get(sid)
+# 当前请求对应的用户 sid：app 每请求鉴权后 set 一次，各模块 current() 自动读到对的人
+_current_sid = contextvars.ContextVar("huajuan_sid", default=DEFAULT_SID)
+
+
+def current(sid=None):
+    """取（必要时创建）某个用户的会话——上层最常用的入口。
+    不传 sid 时读当前请求上下文里的 sid（多用户），默认是 default（老单用户）。"""
+    return store.get(sid if sid is not None else _current_sid.get())
+
+
+def set_sid(sid):
+    """设置当前请求上下文的 sid（app 在每请求鉴权后调用一次）"""
+    _current_sid.set(sid or DEFAULT_SID)
 
 
 def _in_use(sess):

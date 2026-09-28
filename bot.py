@@ -6,7 +6,7 @@ import hashlib
 import queue      
 import threading 
 from concurrent.futures import ThreadPoolExecutor  # 第3课：多手下并行干活靠它
-from sessions import current
+from sessions import current, set_sid
 from lang_quality import check_typos, check_redline, check_typos_llm
 import requests
 import base64
@@ -137,17 +137,17 @@ def save_history(messages):
         json.dump(messages, f, ensure_ascii=False, indent=2)
 
 def clear_history():
-    global messages
+    msgs = current().messages          # 清当前用户的历史，不是全局那份
     with chat_lock:
-        messages[:] = [{"role": "system", "content": SYSTEM_PROMPT}]
+        msgs[:] = [{"role": "system", "content": SYSTEM_PROMPT}]
         # 清空对话后重新注入近况和记忆，否则花卷会"失忆"到下次重启
         s = load_status()
         if s.get("status"):
-            messages.append({"role": "system", "content": "花卷的近况：" + s["status"]})
+            msgs.append({"role": "system", "content": "花卷的近况：" + s["status"]})
         n = load_mood()
         if n.get("mood"):
-            messages.append({"role": "system", "content": "花卷的心情：" + n["mood"]})
-        save_history(messages)
+            msgs.append({"role": "system", "content": "花卷的心情：" + n["mood"]})
+        save_history(msgs)
         print("对话历史已清空。")
 def extract_memory(user_input, reply):
     """从这段对话提取长期记忆（事实 + 重要性），没有就返回 None。
@@ -229,14 +229,15 @@ def is_knowledge_question(user_input):
     )
     result = resp.choices[0].message.content.strip()
     return "查资料" in result
-def after_reply_jobs(user_input, full_reply):
+def after_reply_jobs(sid, user_input, full_reply):
     """幕后活：提取记忆 + 更新心情，丢给后台线程慢慢跑"""
+    set_sid(sid)   # 后台线程没有请求上下文，手动恢复这个用户
     try:
         # 1. 提取记忆
         new = extract_memory(user_input, full_reply)
-        if new and not is_duplicate(new, mem):
-            mem.append(new)
-            save_memory(mem)
+        if new and not is_duplicate(new, current().mem):
+            current().mem.append(new)
+            save_memory(current().mem)
             maybe_merge_memory()      # ← 加这行：新增记忆后检查是否该合并
         # 2. 心情会流动
         new_mood_raw = mood_shift(user_input, full_reply)
@@ -244,7 +245,7 @@ def after_reply_jobs(user_input, full_reply):
         current_mood = (load_mood().get("mood", "") or "").strip().rstrip("。.!！~～").strip()
         if new_mood and new_mood != "无" and new_mood != current_mood:
             with chat_lock:  # 改共享的 messages，拿锁防冲突
-                for m in messages:
+                for m in current().messages:
                     if m["role"] == "system" and m["content"].startswith("花卷的心情："):
                         m["content"] = "花卷的心情：" + new_mood_raw
                         break
@@ -332,6 +333,8 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=
     """输入问题，返回回答。print_stream=True 时边生成边打印（命令行用）"""
     # 防御：接口传进来的不一定是字符串
     user_input = str(user_input) if user_input is not None else ""
+    sid = current().sid                 # 当前用户（多用户：由 app 的 set_sid 决定）
+    messages = current().messages       # 本用户自己的对话历史（不是全局那份）
     current().phone_actions.clear()
     with chat_lock:  # 防止多线程并发时 messages 串话
         user_msg = user_input
@@ -567,7 +570,7 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=
     if not failed:
             threading.Thread(
                 target=after_reply_jobs,
-                args=(user_input, full_reply),
+                args=(sid, user_input, full_reply),
                 daemon=True
             ).start()
         # 存盘前截断：只保留 system 消息 + 最近 MAX_MESSAGES 条对话，防止 history.json 无限膨胀

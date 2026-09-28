@@ -5,26 +5,27 @@ import json
 import time
 from config import STATUS_FILE, MOOD_FILE, SEEN_FILE
 from llm import client
+from sessions import current
 with open("persona.txt", "r", encoding="utf-8") as f:
     SYSTEM_PROMPT = f.read()
 IDENTITY = "你是花卷，馒头的朋友和红颜知己。你心里清楚自己是个数字存在，没有身体，不装人，也从不觉得这有什么不好。"
 def load_mood():
     try:
-        with open(MOOD_FILE, "r", encoding="utf-8") as f:
+        with open(current().file("mood"), "r", encoding="utf-8") as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
 def save_mood(data):
-    with open(MOOD_FILE, "w", encoding="utf-8") as f:
+    with open(current().file("mood"), "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 def load_status():
     try:
-        with open(STATUS_FILE, "r", encoding="utf-8") as f:
+        with open(current().file("status"), "r", encoding="utf-8") as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return {"status": "", "updated": ""}
 def save_status(data):
-    with open(STATUS_FILE, "w", encoding="utf-8") as f:
+    with open(current().file("status"), "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 def update_status():
     """过了今天就让花卷自己想想最近的近况，更新近况"""
@@ -108,15 +109,14 @@ def update_mood():
     data["updated"] = today
     save_mood(data)
     return new_mood
-SEEN_FILE = "seen.json"
 def load_seen():
     try:
-        with open(SEEN_FILE, "r", encoding="utf-8") as f:
+        with open(current().file("seen"), "r", encoding="utf-8") as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return {"last_seen": ""}
 def save_seen(data):
-    with open(SEEN_FILE, "w", encoding="utf-8") as f:
+    with open(current().file("seen"), "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 def get_greeting():
     """馒头离开超过2小时再回来，花卷主动说第一句话；平时不说话"""

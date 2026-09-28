@@ -16,6 +16,7 @@ expenses.json
 reminders.json
 summary.json
 huajuan_files/
+data/
 
 # ===== 运行时与测试产物 =====
 __pycache__/

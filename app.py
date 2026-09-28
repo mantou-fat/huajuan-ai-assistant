@@ -5,7 +5,7 @@ import queue
 import threading
 import os
 import hmac
-from sessions import current
+from sessions import current, set_sid
 from config import FILES_DIR
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024   # 请求体上限 10MB：挡住超大请求打爆内存/API
@@ -21,41 +21,46 @@ def _authed():
     return hmac.compare_digest(str(got), ACCESS_TOKEN)   # 恒定时间比较，防猜钥匙
 @app.before_request
 def guard():
-    """门卫：登录页和静态文件放行，其余没钥匙的一律挡下"""
+    """门卫：登录页和静态文件放行，其余没钥匙的一律挡下；通过后把用户名绑到本次请求的会话上下文"""
     if request.method == "OPTIONS":
         return None
     if request.path.startswith("/static") or request.path == "/login":
         return None
-    if _authed():
-        return None
-    if request.accept_mimetypes.accept_html:   # 浏览器直接开页面 → 送去登录页
-        return redirect("/login")
-    return jsonify({"error": "未授权：请在 .env 配置 ACCESS_TOKEN，访问时带 X-Token 头或 ?token= 参数"}), 401
+    if not _authed():
+        if request.accept_mimetypes.accept_html:   # 浏览器直接开页面 → 送去登录页
+            return redirect("/login")
+        return jsonify({"error": "未授权：请在 .env 配置 ACCESS_TOKEN，访问时带 X-Token 头或 ?token= 参数"}), 401
+    # 鉴权通过：把 cookie 里的用户名（没有则 default）绑到本次请求的会话
+    set_sid(request.cookies.get("huajuan_user", ""))
 LOGIN_PAGE = """<!DOCTYPE html><html lang="zh"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0"><title>花卷 · 进门</title>
 <style>body{font-family:sans-serif;background:#f0f4f0;display:flex;justify-content:center;align-items:center;height:100vh;margin:0}
-.card{background:#fff;padding:32px;border-radius:14px;box-shadow:0 4px 18px rgba(0,0,0,.12);text-align:center;width:260px}
-input{width:100%;padding:10px;margin:14px 0;border:1px solid #ccc;border-radius:8px;font-size:16px;box-sizing:border-box}
+.card{background:#fff;padding:32px;border-radius:14px;box-shadow:0 4px 18px rgba(0,0,0,.12);text-align:center;width:280px}
+input{width:100%;padding:10px;margin:10px 0;border:1px solid #ccc;border-radius:8px;font-size:16px;box-sizing:border-box}
 button{width:100%;padding:10px;background:#4CAF50;color:#fff;border:none;border-radius:8px;font-size:16px;cursor:pointer}</style>
 </head><body><div class="card"><h2>🥐 花卷</h2>
-<p style="color:#888;font-size:13px">输入访问钥匙（ACCESS_TOKEN）进门</p>
-<form method="post"><input type="password" name="token" placeholder="访问钥匙" autofocus>
-<button type="submit">进门</button></form>__MSG__</div></body></html>"""
+<p style="color:#888;font-size:13px">填个名字进门，各聊各的、互不串话</p>
+<form method="post"><input name="username" placeholder="你的名字（如：馒头）" autofocus>
+__TOKEN__<button type="submit">进门</button></form>__MSG__</div></body></html>"""
 @app.route("/login", methods=["GET", "POST"])
 def login():
-    """登录页：钥匙对了就种 cookie（HttpOnly），之后一个月免登录"""
+    """登录页：填名字进门（多用户各聊各的）；配了 ACCESS_TOKEN 就还要对钥匙"""
     msg = ""
     if request.method == "POST":
-        data = request.form.get("token") or ""
-        if not ACCESS_TOKEN:
-            msg = "<p style='color:#c33;font-size:13px'>服务端还没在 .env 里配 ACCESS_TOKEN，门没上锁</p>"
-        elif hmac.compare_digest(data, ACCESS_TOKEN):
-            resp = redirect("/")
-            resp.set_cookie("huajuan_token", ACCESS_TOKEN, max_age=30*24*3600, httponly=True, samesite="Lax")
-            return resp
-        else:
+        username = (request.form.get("username") or "").strip()
+        token = request.form.get("token") or ""
+        if not username:
+            msg = "<p style='color:#c33;font-size:13px'>先填个名字</p>"
+        elif ACCESS_TOKEN and not hmac.compare_digest(token, ACCESS_TOKEN):
             msg = "<p style='color:#c33;font-size:13px'>钥匙不对，再试试</p>"
-    return LOGIN_PAGE.replace("__MSG__", msg), (401 if request.method == "POST" and msg else 200)
+        else:
+            resp = redirect("/")
+            resp.set_cookie("huajuan_user", username, max_age=365*24*3600, httponly=True, samesite="Lax")
+            if ACCESS_TOKEN:
+                resp.set_cookie("huajuan_token", ACCESS_TOKEN, max_age=30*24*3600, httponly=True, samesite="Lax")
+            return resp
+    token_html = '<input type="password" name="token" placeholder="访问钥匙（ACCESS_TOKEN）">' if ACCESS_TOKEN else ""
+    return LOGIN_PAGE.replace("__TOKEN__", token_html).replace("__MSG__", msg), (401 if request.method == "POST" and msg else 200)
 HTML = """
 <!DOCTYPE html>
 <html lang="zh">
