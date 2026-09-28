@@ -21,17 +21,23 @@ def _authed():
     return hmac.compare_digest(str(got), ACCESS_TOKEN)   # 恒定时间比较，防猜钥匙
 @app.before_request
 def guard():
-    """门卫：登录页和静态文件放行，其余没钥匙的一律挡下；通过后把用户名绑到本次请求的会话上下文"""
+    """门卫：先要"用户名"（多用户身份），再要可选的"访问钥匙"。登录页和静态文件放行。"""
     if request.method == "OPTIONS":
         return None
     if request.path.startswith("/static") or request.path == "/login":
         return None
-    if not _authed():
-        if request.accept_mimetypes.accept_html:   # 浏览器直接开页面 → 送去登录页
+    user = request.cookies.get("huajuan_user")
+    if not user:   # 还没填过名字 → 去登录页
+        if request.accept_mimetypes.accept_html:
             return redirect("/login")
-        return jsonify({"error": "未授权：请在 .env 配置 ACCESS_TOKEN，访问时带 X-Token 头或 ?token= 参数"}), 401
-    # 鉴权通过：把 cookie 里的用户名（没有则 default）绑到本次请求的会话
-    set_sid(request.cookies.get("huajuan_user", ""))
+        return jsonify({"error": "请先登录（填名字进门）"}), 401
+    if ACCESS_TOKEN and not _authed():   # 配了钥匙就还要对钥匙
+        if request.accept_mimetypes.accept_html:
+            return redirect("/login")
+        return jsonify({"error": "未授权：访问钥匙不对"}), 401
+    # 身份没问题：把用户名绑到本次请求的会话上下文
+    set_sid(user)
+    return None
 LOGIN_PAGE = """<!DOCTYPE html><html lang="zh"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0"><title>花卷 · 进门</title>
 <style>body{font-family:sans-serif;background:#f0f4f0;display:flex;justify-content:center;align-items:center;height:100vh;margin:0}
