@@ -40,7 +40,7 @@ def load_knowledge(file_path):
 def add_knowledge(text):
     """知识入库：短句直接进；长文自动按句切成 ≤80 字的分块再进（复用 split_long_text），
     防止一整行 3000 字把检索搞崩"""
-    global _kb_embeddings
+    global _kb_embeddings, _kb_graph
     text = (text or "").strip()
     if not text:
         return 0
@@ -53,9 +53,11 @@ def add_knowledge(text):
         with open(KNOWLEDGE_FILE, "a", encoding="utf-8") as f:
             f.write(c + "\n")
     _kb_embeddings = None            # 知识库变了，向量缓存作废
+    _kb_graph = None                 # 图谱也作废
     return len(chunks)
 knowledge_base = load_knowledge(KNOWLEDGE_FILE)
 _kb_embeddings = None  # 知识库向量缓存，避免每次检索都重新算全库向量
+_kb_graph = None       # 知识图谱缓存：{节点索引: [邻居索引...]}
 def get_embedding(texts):
     """获取文本的向量表示，自动分批（每批最多10条）"""
     batch_size = 10
@@ -205,8 +207,53 @@ def search_knowledge_smart(query, k=3):
             merged.append(x)
     return merged[:k]
 
+def build_graph(top_n=5, threshold=0.50):
+    """把知识库建成轻量图谱：每条知识是节点，和它最相似的 top_n 条连边。"""
+    global _kb_graph
+    if _kb_graph is not None:
+        return _kb_graph
+    kb_vecs = get_kb_embeddings()
+    graph = {}
+    for i in range(len(knowledge_base)):
+        sims = [(j, cosine_similarity(kb_vecs[i], kb_vecs[j]))
+                for j in range(len(knowledge_base)) if j != i]
+        sims.sort(key=lambda x: x[1], reverse=True)
+        graph[i] = [j for j, s in sims[:top_n] if s > threshold]
+    _kb_graph = graph
+    return graph
+
+def graph_search(query, k=3, hops=1):
+    """图谱检索：向量找种子节点，再沿图多跳扩展邻居，返回种子+邻居（给模型更全的上下文）。"""
+    qv = get_embedding([query])[0]
+    kb_vecs = get_kb_embeddings()
+    scored = sorted(
+        [(i, hybrid_score(query, knowledge_base[i], qv, v)) for i, v in enumerate(kb_vecs)],
+        key=lambda x: x[1], reverse=True,
+    )
+    seeds = [i for i, s in scored[:k] if s >= 0.25]
+    if not seeds:
+        return []
+    graph = build_graph()
+    picked = set(seeds)
+    frontier = set(seeds)
+    for _ in range(hops):
+        nxt = set()
+        for node in frontier:
+            for nb in graph.get(node, []):
+                if nb not in picked:
+                    picked.add(nb)
+                    nxt.add(nb)
+        frontier = nxt
+    ordered = [knowledge_base[i] for i in seeds] + [knowledge_base[i] for i in picked if i not in seeds]
+    return ordered
+
 def search_knowledge(query):
-    """调用工具，查本地知识库（先直接搜，搜不到就多路召回补搜）"""
+    """调用工具，查本地知识库：关系类问题走图谱，否则先直接搜、搜不到多路召回"""
+    # 关系/关联类问题走图谱（能多跳扩展邻居）
+    if re.search(r"关系|联系|区别|关联|怎么影响|什么相关|和.*有关", query):
+        results = graph_search(query, k=3, hops=1)
+        if results:
+            return "\n\n".join(results[:5])
     results = top_k_search(query, k=3)
     if results:
         return "\n\n".join(results)
