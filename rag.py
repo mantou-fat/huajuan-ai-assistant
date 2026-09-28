@@ -247,17 +247,41 @@ def graph_search(query, k=3, hops=1):
     ordered = [knowledge_base[i] for i in seeds] + [knowledge_base[i] for i in picked if i not in seeds]
     return ordered
 
+def check_retrieval(query, results):
+    """CRAG 自检：检索结果够不够回答？够返回空串，不够返回"缺什么"。失败静默当够用。"""
+    try:
+        resp = client.chat.completions.create(
+            model="qwen-plus",
+            messages=[{"role": "user", "content": (
+                "严格判断：下面的知识【直接回答】了用户的问题吗？\n"
+                "用户问题：" + query + "\n检索到的知识：\n" + "\n".join(results[:5]) + "\n"
+                "只有真正给出了答案才算'够用'；如果只是相关、但没回答到点子上"
+                "（比如问'移植步骤'却只有'这是什么'），必须判'不够'。\n"
+                "足够只回复：够用；不够回复：不够：缺XXX（一句话说缺什么）。"
+            )}],
+            temperature=0,
+            max_tokens=60,
+        )
+        v = (resp.choices[0].message.content or "").strip()
+        if "不够" in v:
+            return v          # 先判"不够"（防止"不够用"被当成"够用"）
+        if "够用" in v:
+            return ""
+        return v              # 说不清，保守当不够
+    except Exception:
+        return ""
+
 def search_knowledge(query):
-    """调用工具，查本地知识库：关系类问题走图谱，否则先直接搜、搜不到多路召回"""
-    # 关系/关联类问题走图谱（能多跳扩展邻居）
+    """调用工具，查本地知识库：关系类走图谱，否则直接搜/多路召回；最后自检（CRAG）。"""
     if re.search(r"关系|联系|区别|关联|怎么影响|什么相关|和.*有关", query):
-        results = graph_search(query, k=3, hops=1)
-        if results:
-            return "\n\n".join(results[:5])
-    results = top_k_search(query, k=3)
-    if results:
-        return "\n\n".join(results)
-    results = multi_recall(query, k=3)
+        results = graph_search(query, k=3, hops=1)[:5]
+    else:
+        results = top_k_search(query, k=3)
+        if not results:
+            results = multi_recall(query, k=3)
     if not results:
-        return "知识库里没找到相关内容"
+        return "知识库里没找到相关内容（可改用联网搜索补充）"
+    verdict = check_retrieval(query, results)
+    if verdict:
+        return "知识库查到这些：\n" + "\n\n".join(results) + "\n\n【自检提示】" + verdict + "（建议联网补充）"
     return "\n\n".join(results)
