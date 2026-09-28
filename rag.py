@@ -161,6 +161,35 @@ def hyde_query(query):
     except Exception:
         return ""
 
+def gen_query_variants(query):
+    """把问题改写成3个不同问法（多路召回的第一路：改写）"""
+    try:
+        resp = client.chat.completions.create(
+            model="qwen-plus",
+            messages=[{"role": "user", "content": (
+                "把下面的问题改写成3个不同的、更适合检索的问法，每行一个，只输出问法本身，不要编号、不要解释：\n" + query
+            )}],
+            temperature=0.4,
+            max_tokens=150,
+        )
+        return [l.strip() for l in (resp.choices[0].message.content or "").split("\n") if l.strip()][:3]
+    except Exception:
+        return []
+
+def multi_recall(query, k=3, min_score=0.25):
+    """多路召回：原问题 + 改写 + HyDE 各搜一遍，按综合分合并去重取前k。"""
+    variants = [query] + gen_query_variants(query)
+    hyde = hyde_query(query)
+    if hyde:
+        variants.append(hyde)
+    best = {}
+    for v in variants:
+        for text, hybrid, cos, lex in debug_retrieval(v, k=k):
+            if hybrid >= min_score and (text not in best or hybrid > best[text]):
+                best[text] = hybrid
+    ranked = sorted(best.items(), key=lambda x: x[1], reverse=True)
+    return [t for t, _ in ranked[:k]]
+
 def search_knowledge_smart(query, k=3):
     """智能检索：先直接搜；搜不到再 HyDE 脑补答案补搜一次，合并去重。"""
     direct = top_k_search(query, k=k)
@@ -177,8 +206,11 @@ def search_knowledge_smart(query, k=3):
     return merged[:k]
 
 def search_knowledge(query):
-    """调用工具，查本地知识库（先直接搜，搜不到 HyDE 补搜）"""
-    results = search_knowledge_smart(query, k=3)
+    """调用工具，查本地知识库（先直接搜，搜不到就多路召回补搜）"""
+    results = top_k_search(query, k=3)
+    if results:
+        return "\n\n".join(results)
+    results = multi_recall(query, k=3)
     if not results:
         return "知识库里没找到相关内容"
     return "\n\n".join(results)
