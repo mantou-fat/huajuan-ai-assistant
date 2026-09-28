@@ -2,6 +2,8 @@
 .env
 persona.txt
 knowledge_base.txt
+聊天记录_原始.txt
+微调数据*.jsonl
 home.json
 history.json
 memory.json
