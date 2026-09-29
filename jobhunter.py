@@ -3,11 +3,21 @@
 流程：填条件 → 实时搜索 → qwen 筛出严格 JSON → 前端渲染成表格（链接可点）。"""
 import json
 import re
+import os
+import hmac
 import requests
 from flask import Flask, request, render_template_string, jsonify
 from llm import client, tavily_key
 
 app = Flask(__name__)
+# 公开后保护 API 成本：.env 里配了 ACCESS_TOKEN 就上锁，没配就不锁
+ACCESS_TOKEN = os.getenv("ACCESS_TOKEN", "")
+
+
+def _token_ok(got):
+    if not ACCESS_TOKEN:
+        return True
+    return bool(got) and hmac.compare_digest(str(got).encode(), ACCESS_TOKEN.encode())
 
 def search(query, n=6):
     """Tavily 实时搜索，返回结构化结果列表 [{title,url,content}]"""
@@ -107,6 +117,7 @@ a{color:#1a73e8}
   <label>专业 / 方向</label><input name="major" placeholder="如：自动化 / Python / 嵌入式">
   <label>期望薪资</label><input name="salary" placeholder="如：6k-10k / 面议">
   <label>身份</label><select name="fresh"><option>应届</option><option>往届</option></select>
+  <input type="hidden" name="token" id="token">
   <br><button type="submit">帮我筛</button>
 </form>
 <div id="loading">⏳ 正在搜索 + 筛选中，稍等几秒…</div>
@@ -114,6 +125,8 @@ a{color:#1a73e8}
 </div>
 <script>
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+// 从网址 ?token=xxx 里取钥匙，塞进隐藏字段
+document.getElementById('token').value = new URLSearchParams(location.search).get('token') || '';
 document.getElementById('f').addEventListener('submit', function(e){
   e.preventDefault();
   const fd = new FormData(this);
@@ -124,6 +137,10 @@ document.getElementById('f').addEventListener('submit', function(e){
     .then(d=>{
       document.getElementById('loading').style.display='none';
       const box = document.getElementById('result');
+      if (d.error) {
+        box.innerHTML = '<p style="color:#c00">'+esc(d.error)+'</p>';
+        return;
+      }
       const items = d.items;
       if (Array.isArray(items) && items.length) {
         let html = '<table><tr><th>公司</th><th>岗位</th><th>投递</th><th>匹配理由</th><th>薪资</th></tr>';
@@ -152,6 +169,8 @@ def index():
 
 @app.route("/search", methods=["POST"])
 def search_api():
+    if not _token_ok(request.form.get("token")):
+        return jsonify({"items": [], "error": "访问钥匙不对，请在网址后加 ?token=你的钥匙"})
     city = request.form.get("city", "").strip()
     major = request.form.get("major", "").strip()
     salary = request.form.get("salary", "").strip()
