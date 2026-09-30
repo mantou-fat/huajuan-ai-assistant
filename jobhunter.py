@@ -169,8 +169,6 @@ def index():
 
 @app.route("/search", methods=["POST"])
 def search_api():
-    if not _token_ok(request.form.get("token")):
-        return jsonify({"items": [], "error": "访问钥匙不对，请在网址后加 ?token=你的钥匙"})
     city = request.form.get("city", "").strip()
     major = request.form.get("major", "").strip()
     salary = request.form.get("salary", "").strip()
