@@ -119,7 +119,9 @@ def save_seen(data):
     with open(current().file("seen"), "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 def get_greeting():
-    """馒头离开超过2小时再回来，花卷主动说第一句话；平时不说话"""
+    """馒头离开超过2小时再回来，花卷主动说第一句话；平时不说话。
+    升级：见面时自然提一句记忆里的事（他上次说过/约过的），更亲。"""
+    from memory import load_memory
     data = load_seen()
     now = time.time()
     if data.get("last_seen"):
@@ -140,16 +142,27 @@ def get_greeting():
         hint = "馒头隔了一整天没来，他刚刚上线了"
     else:
         hint = f"馒头离开了大概{int(gap_hours)}个小时，他刚刚上线了"
+    # 读这个用户的记忆，见面时能自然提一句（记得他最近在忙啥、约过啥）
+    mem_hint = ""
+    try:
+        mem = load_memory()
+        if mem:
+            texts = [m["t"] if isinstance(m, dict) else str(m) for m in mem[-6:]]
+            mem_hint = "你记得关于馒头的事：\n" + "\n".join("- " + t for t in texts) + "\n"
+    except Exception:
+        mem_hint = ""
     status_data = load_status()
     mood_data = load_mood()
     prompt = (
         IDENTITY
         + f"你现在的近况：{status_data.get('status','')}，心情：{mood_data.get('mood','')}。"
-        + f"情况：{hint}。"
+        + f"情况：{hint}。\n"
+        + mem_hint
         + "请以花卷的身份主动跟馒头说第一句话，一两句就好，"
-        "可以带点小情绪（等久了、想念、假装生气都可以）。"
+        "可以带点小情绪（等久了、想念、假装生气都可以），"
+        "也可以自然地提一句你记得的事（比如他最近在忙的事、约过的事），但别生硬地背记忆。"
         "像真人发微信那样说人话：不要括号动作描写，不要场景描写，"
-        "不要每次都提你的偏好，不上价值不煽情。只说这句话本身。"
+        "不上价值不煽情。只说这句话本身。"
     )
     resp = client.chat.completions.create(
         model="qwen-plus",

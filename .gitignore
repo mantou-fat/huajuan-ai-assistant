@@ -1,6 +1,9 @@
 # ===== 密钥与个人隐私(绝不提交) =====
 .env
 persona.txt
+persona_她.txt
+persona_备份.txt
+persona_黄蓉.txt
 knowledge_base.txt
 聊天记录_原始.txt
 微调数据*.jsonl
