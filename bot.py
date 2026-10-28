@@ -31,7 +31,8 @@ from rag import (split_long_text, load_knowledge, add_knowledge, knowledge_base,
                  top_k_search, search_knowledge)
 # 记忆搬家（重构第四步，行为零变化）
 from memory import (mem, load_memory, save_memory, delete_memory, retrieve_memory,
-                    is_duplicate, judge_merge, merge_memory, maybe_merge_memory)
+                    is_duplicate, judge_merge, merge_memory, maybe_merge_memory,
+                    apply_update)
 # ===== 重构第五、六步：人设/状态 → persona_state.py，工具层 → tools.py =====
 # bot.py 现在只剩"编排层"：记忆/历史/流式调用/工具循环/审计。
 from persona_state import (SYSTEM_PROMPT, IDENTITY, load_status, save_status, update_status,
@@ -150,34 +151,58 @@ def clear_history():
         save_history(msgs)
         print("对话历史已清空。")
 def extract_memory(user_input, reply):
-    """从这段对话提取长期记忆（事实 + 重要性），没有就返回 None。
-    返回 {"t": 事实, "i": 重要性0~1}，重要性高的事（喜好/约定/生日）以后优先被召回。"""
-    prompt = ("下面是用户和你的对话。请只提取'关于用户的、值得长期记住的事实'，"
-        "比如喜好、生日、约定、经历。如果有，输出格式：'事实|重要性'，重要性用1到10的整数"
-        "（10=极其重要如生日/重大约定，1=鸡毛蒜皮）。例如：'馒头怕打雷|8'。"
-        "没有值得记的就只回复两个字：无\n\n"
+    """从这段对话提取长期记忆。返回 [{"t","conf","i"}] 或 None。
+    原则：只记录用户明确说过的，禁止推断；不确定的给低 confidence（进等待室）。"""
+    prompt = (
+        "从对话中提取「用户明确陈述过的、未来可能有用的事实」。\n\n"
+        "硬约束：\n"
+        "1. 只记录用户原话中明确出现的信息。\n"
+        "2. 禁止推断、补全、演绎（用户没说的，不要补）。\n"
+        "3. 用户没说的工作、身份、关系、喜好，一律不记。\n"
+        "4. 无法从原话直接得出的，不要输出。\n"
+        "5. 宁可漏，不可错。\n\n"
+        "对每条事实给出两个 0~1 的数：\n"
+        "- confidence：原话有多明确（直说=0.9，需要一点理解=0.6，含糊=0.3）\n"
+        "- importance：对未来有多重要（身份/约定/长期偏好高，一次性琐事低）\n\n"
+        "没有可记的就输出 {\"facts\": []}\n"
+        "只输出 JSON，不要其它文字：\n"
+        "{\"facts\": [{\"text\": \"...\", \"confidence\": 0.0, \"importance\": 0.0}]}\n\n"
         f"用户：{user_input}\n花卷：{reply}"
     )
     resp = client.chat.completions.create(
         model="qwen-plus",
         messages=[{"role": "user", "content": prompt}],
         temperature=0,
-        max_tokens=100
+        max_tokens=400,
     )
     raw = (resp.choices[0].message.content or "").strip()
-    if not raw or raw == "无":
+    if not raw:
         return None
-    fact, imp = raw, 0.5
-    if "|" in raw:
-        left, _, right = raw.partition("|")
-        fact = left.strip()
+    import json as _json, re as _re
+    m = _re.search(r"\{.*\}", raw, _re.DOTALL)
+    if not m:
+        return None
+    try:
+        data = _json.loads(m.group(0))
+    except Exception:
+        return None
+    facts = data.get("facts") or []
+    out = []
+    now = time.strftime("%Y-%m-%d %H:%M:%S")
+    for f in facts:
+        text = str(f.get("text", "")).strip()
+        if not text:
+            continue
         try:
-            imp = max(0.0, min(1.0, float(right.strip()) / 10.0))
-        except ValueError:
+            conf = max(0.0, min(1.0, float(f.get("confidence", 0.6))))
+        except (TypeError, ValueError):
+            conf = 0.6
+        try:
+            imp = max(0.0, min(1.0, float(f.get("importance", 0.5))))
+        except (TypeError, ValueError):
             imp = 0.5
-    if not fact:
-        return None
-    return {"t": fact, "i": imp, "last": time.strftime("%Y-%m-%d %H:%M:%S")}
+        out.append({"t": text, "conf": conf, "i": imp, "last": now})
+    return out or None
 def load_summary():
     try:
         with open(current().file("summary"), "r", encoding="utf-8") as f:
@@ -233,12 +258,20 @@ def after_reply_jobs(sid, user_input, full_reply):
     """幕后活：提取记忆 + 更新心情，丢给后台线程慢慢跑"""
     set_sid(sid)   # 后台线程没有请求上下文，手动恢复这个用户
     try:
-        # 1. 提取记忆
-        new = extract_memory(user_input, full_reply)
-        if new and not is_duplicate(new, current().mem):
-            current().mem.append(new)
-            save_memory(current().mem)
-            maybe_merge_memory()      # ← 加这行：新增记忆后检查是否该合并
+        # 1. 提取记忆（PreCoMem 式：只记明确陈述，不确定的进等待室）
+        new_facts = extract_memory(user_input, full_reply)
+        if new_facts:
+            changed = False
+            for f in new_facts:
+                try:
+                    action, _ = apply_update(f["t"], f.get("conf", 0.6), f.get("i", 0.5))
+                    print(f"[记忆] {action}: {f['t'][:40]}")
+                    changed = True
+                except Exception as e:
+                    print("[记忆] 更新失败(不影响对话):", e)
+            if changed:
+                current().mem[:] = load_memory()
+                maybe_merge_memory()
         # 2. 心情会流动
         new_mood_raw = mood_shift(user_input, full_reply)
         new_mood = new_mood_raw.strip().rstrip("。.!！~～").strip()

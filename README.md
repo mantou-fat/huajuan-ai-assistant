@@ -41,6 +41,8 @@ python demo\make_demo.py
   ③ 记忆归纳整理（超 20 条自动归纳为更高层结论）
 - **多用户系统**：用户名登录 + ContextVar 会话路由，每用户独立记忆/历史/心情（`data/<sid>/` 隔离）、
   会话懒加载与闲置回收，多用户互不串话
+- **飞书接入**：长连接机器人（无需公网 IP），私聊 / 群里 @ 即可对话；按飞书 open_id 隔离会话与记忆，
+  消息按 message_id 去重，长回复自动切段
 - **Agent 高级推理**：CoT（计算/推理题强制分步）、Plan-and-Execute（多步任务先规划再执行）、
   Reflexion（答完自检、发现问题带反馈重写）
 - **人格系统**：自我约束集模型（不变量 + 协变规律 + 外置硬约束），few-shot 对话示范，核心人格稳定不漂移
@@ -75,6 +77,7 @@ sessions.py     多用户会话：ContextVar 路由、每用户数据目录、�
 config.py       配置：路径、白名单、阈值、可重试工具表
 llm.py          模型客户端与密钥
 app.py          Flask 网页端：SSE 流式、TTS、登录门卫
+feishu_bot.py   飞书机器人：长连接事件订阅、消息去重、按 open_id 路由多用户会话
 体检.py         一键自动化回归脚本（python 体检.py）
 persona.txt     人设（个人隐私，不入库；用 persona.example.txt 代替）
 knowledge_base.txt  本地知识库（个人隐私，不入库；用 knowledge_base.example.txt 代替）
@@ -112,6 +115,8 @@ DASHSCOPE_API_KEY=sk-xxx          # 阿里云百炼，聊天/工具/embedding �
 TAVILY_API_KEY=tvly-xxx           # 可选：联网搜索
 ACCESS_TOKEN=随便设一串长密码      # Web 访问钥匙（可选但强烈建议）
 BJS_API_KEY=sk-xxx                # 可选：Fun-Music 唱歌（需单独开通权限）
+FEISHU_APP_ID=cli_xxx             # 可选：飞书机器人（feishu_bot.py 用）
+FEISHU_APP_SECRET=xxx             # 可选：飞书机器人
 ```
 
 3. 启动：
@@ -136,7 +141,33 @@ python app.py
 python 体检.py
 ```
 
-## 示例玩法
+## 飞书接入（笔试作品新增）
+
+花卷可以接进飞书，变成群里的一个「有人设、有记忆」的成员：私聊或群里 @ 它即可对话。
+
+- **长连接模式**：由飞书主动连本机，**不需要公网 IP / 域名 / HTTPS**
+- **多用户隔离**：按飞书 `open_id` 映射到花卷会话，每个人有自己的记忆和历史，互不串话
+- **消息去重**：按 `message_id` 去重（飞书未及时 ack 会重推）
+- **长回复切段**：超过 1500 字自动分条发送
+
+### 步骤
+
+1. 飞书开放平台 → 创建**企业自建应用** → 添加「机器人」能力
+2. 事件订阅：选**长连接**模式，订阅 `im.message.receive_v1`
+3. 权限：`im:message`（读取消息）、`im:message:send_as_bot`（发消息）
+4. `.env` 填 `FEISHU_APP_ID` / `FEISHU_APP_SECRET`
+5. 启动：
+
+```
+python feishu_bot.py
+```
+
+6. 在飞书里私聊机器人，或在群里 @ 它，即可对话
+
+> 依赖：`lark-oapi`（`pip install lark-oapi`）。脚本会优先从本仓库 `.pkgs/` 加载，
+> 若没有该目录则使用全局安装的版本。
+
+
 
 - "现在几点了？" / "北京今天天气怎么样？" —— 必走真实工具查询
 - "我今天买咖啡花了 18.5 元，记一下" —— 真实记账落盘

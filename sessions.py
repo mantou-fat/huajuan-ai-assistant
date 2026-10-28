@@ -21,7 +21,10 @@ from config import (HISTORY_FILE, MEMORY_FILE, VEC_CACHE_FILE, STATUS_FILE, MOOD
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 DATA_ROOT = os.path.join(PROJECT_ROOT, "data")   # 多用户的数据都放这儿，一个用户一个子目录
 DEFAULT_SID = "default"                          # 单用户模式用的 sid（也是老文件的主人）
-SID_PATTERN = re.compile(r"^[^\\/:*?\"<>|.\x00-\x1f]{1,32}$")   # 允许中文/字母数字/下划线连字符，禁止路径分隔符和点(防目录穿越)
+# Docker 数据卷开关：设了 HUAJUAN_DATA_DIR，所有用户数据都落到这个目录（-v 挂载即永久保存）；
+# 不设则行为完全不变（老单用户=项目根目录相对路径，多用户=data/<sid>/）
+_DATA_BASE = os.environ.get("HUAJUAN_DATA_DIR", "").strip()
+SID_PATTERN = re.compile(r"^[^\\/:*?\"<>|.\x00-\x20]{1,32}$")   # 允许中文/字母数字/下划线连字符，禁止路径分隔符、点和空格(防目录穿越)
 
 # 文件名映射：值全部来自 config，避免"同一个文件名写两遍"（这项目吃过重复定义的亏）
 FILE_MAP = {
@@ -40,11 +43,19 @@ class Session:
             raise ValueError("非法的 sid：%r（只允许字母数字下划线连字符，长度 1-32）" % (sid,))
         self.sid = sid
         self.legacy = legacy          # True=老文件（项目根目录，相对路径），单用户模式专用
-        self.dir = PROJECT_ROOT if legacy else os.path.join(DATA_ROOT, sid)
-        if not legacy:
-            os.makedirs(self.dir, exist_ok=True)   # 新用户第一次存数据前先建好目录
-        # 文件路径：legacy 模式就是现在那几个相对路径（和 config 常量一模一样）
-        self.files = {k: (v if legacy else os.path.join(self.dir, v)) for k, v in FILE_MAP.items()}
+        if _DATA_BASE:
+            # Docker：单用户=数据卷根目录，多用户=数据卷/<sid>/，都提前建好目录
+            self.dir = _DATA_BASE if legacy else os.path.join(_DATA_BASE, sid)
+            os.makedirs(self.dir, exist_ok=True)
+        else:
+            self.dir = PROJECT_ROOT if legacy else os.path.join(DATA_ROOT, sid)
+            if not legacy:
+                os.makedirs(self.dir, exist_ok=True)   # 新用户第一次存数据前先建好目录
+        # 文件路径：legacy 且没设数据卷 = 老相对路径（和 config 常量一模一样）；其余 = 拼到 dir 下
+        if legacy and not _DATA_BASE:
+            self.files = {k: v for k, v in FILE_MAP.items()}
+        else:
+            self.files = {k: os.path.join(self.dir, v) for k, v in FILE_MAP.items()}
         self.lock = threading.RLock()          # 每个用户一把锁：A 聊天不堵 B
         # 时间戳用 monotonic：只算时间差、不受系统改时间影响。
         # 注意 Windows 上 time.time()/monotonic() 精度约 15ms——同一时间片内建的会话

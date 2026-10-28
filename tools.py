@@ -959,10 +959,9 @@ def tts(text, filename="tts_latest.wav"):
             "Content-Type": "application/json",
         }
         body = {
-            "model": "qwen-tts",
+            "model": "qwen3-tts-flash",
             "input": {"text": piece},
-            "voice": "longxiaochun_v2",
-            "parameters": {"format": "wav", "sample_rate": 32000},
+            "parameters": {"voice": "Cherry", "format": "wav", "sample_rate": 24000},
         }
         req = urllib.request.Request(url, data=_json.dumps(body).encode("utf-8"), headers=headers)
         with urllib.request.urlopen(req, timeout=60) as r:

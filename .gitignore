@@ -24,8 +24,14 @@ data/
 # ===== 运行时与测试产物 =====
 __pycache__/
 *.log
+*.whl
 backups/
 .pip-tmp/
+.pipwork/
+.tmp/
+.venv/
+.pkgs/
+_fsdata/
 .vscode/
 screenshots/
 video_frames/

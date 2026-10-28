@@ -27,20 +27,23 @@ def _decay(last_str):
         return 1.0
 
 def retrieve_memory(query, k=4, threshold=0.30):
-    """记忆召回：混合检索 × 重要性加权 × 遗忘衰减 + 相对动态阈值。
-    重要的事往前排；久不提的事按遗忘曲线衰减；被想起一次就刷新时间（用进废退）。"""
+    """记忆召回：混合检索 × 置信度 × 重要性 × 遗忘衰减。
+    PreCoMem 式：只召回当前有效（to 为空）的记忆；置信度越低排得越后。"""
     mem = load_memory()
     if not mem:
         return []
-    texts = _mem_texts(mem)
+    # 只取当前有效的信念（被 CORRECT 标记失效的历史事实不参与日常召回）
+    active = [m for m in mem if not m.get("to")]
+    if not active:
+        return []
+    texts = _mem_texts(active)
     emb = current().mem_embeddings
-    if emb is None:
-        disk_cache = None
+    if emb is None or len(emb) != len(texts):
         try:
             with open(current().file("vec_cache"), "r", encoding="utf-8") as f:
                 disk_cache = json.load(f)
         except (FileNotFoundError, json.JSONDecodeError):
-            pass
+            disk_cache = None
         if disk_cache is not None and len(disk_cache) == len(texts):
             emb = disk_cache
         else:
@@ -55,10 +58,13 @@ def retrieve_memory(query, k=4, threshold=0.30):
     query_vec = get_embedding([q])[0]
     scored = []
     for i, v in enumerate(emb):
+        m = active[i]
         base = hybrid_score(q, texts[i], query_vec, v)
-        imp = mem[i].get("i", 0.5) if isinstance(mem[i], dict) else 0.5
-        decay = _decay(mem[i].get("last", "")) if isinstance(mem[i], dict) else 1.0
-        scored.append((i, base * (0.4 + 0.6 * imp) * decay))   # 重要性 × 遗忘衰减
+        conf = float(m.get("conf", 0.7))
+        imp = float(m.get("i", 0.5))
+        decay = _decay(m.get("last", ""))
+        # 置信度是主导（低置信度的假设自然排后），重要性/时间做微调
+        scored.append((i, base * (0.25 + 0.75 * conf) * (0.5 + 0.5 * imp) * decay))
     scored.sort(key=lambda x: x[1], reverse=True)
     if not scored:
         return []
@@ -70,15 +76,18 @@ def retrieve_memory(query, k=4, threshold=0.30):
             break
         results.append(texts[i])
         recalled_idx.append(i)
-    # 召回即强化：被想起的记忆刷新"上次想起时间"，遗忘衰减从头算
+    # 召回即强化：被想起的记忆刷新"上次想起时间"
     if recalled_idx:
         now = _now()
         changed = False
+        active_by_text = {m["t"]: m for m in active}
         for i in recalled_idx:
-            if isinstance(mem[i], dict) and mem[i].get("last") != now:
-                mem[i]["last"] = now
+            m = active_by_text.get(texts[i])
+            if m is not None and m.get("last") != now:
+                m["last"] = now
                 changed = True
         if changed:
+            # 写回完整 mem（active 是 mem 里的同一批 dict 对象，引用保持一致）
             save_memory(mem)
     return results
 def load_memory():
@@ -88,14 +97,32 @@ def load_memory():
     except (FileNotFoundError, json.JSONDecodeError):
         return []
     # 迁移：老格式是纯字符串，统一包成 {"t": 文本, "i": 重要性, "last": 上次想起时间}
+    # 新版：再加 type(FACT/HYPOTHESIS) / conf(置信度) / hits / contra / from / to
     now = _now()
     out = []
     for m in data:
         if isinstance(m, dict) and "t" in m:
-            out.append({"t": m["t"], "i": float(m.get("i", 0.5)), "last": m.get("last", now)})
+            out.append(_normalize(m, now))
         else:
-            out.append({"t": str(m), "i": 0.5, "last": now})
+            out.append(_normalize({"t": str(m)}, now))
     return out
+
+
+def _normalize(m, now=None):
+    """把任意版本的记忆条目补齐成新版字段（幂等）"""
+    now = now or _now()
+    d = {
+        "t": str(m.get("t", "")),
+        "type": m.get("type", "FACT"),
+        "conf": float(m.get("conf", 0.7)),
+        "i": float(m.get("i", 0.5)),
+        "last": m.get("last", now),
+        "hits": int(m.get("hits", 0)),
+        "contra": int(m.get("contra", 0)),
+        "from": m.get("from", now),
+        "to": m.get("to"),
+    }
+    return d
 
 def _mem_texts(mem):
     """从记忆列表里抽出纯文本（用于 embedding 和返回给模型）"""
@@ -129,6 +156,151 @@ def is_duplicate(new_fact, existing_memories, threshold=0.75):
         if cosine_similarity(new_vec, vec) >= threshold:
             return True
     return False
+
+
+# ===== PreCoMem 式三态更新 =====
+# MAINTAIN：新证据支持已有信念 → 抬置信度
+# PROFILE：证据模糊 → 存成低置信度 HYPOTHESIS（等待室），攒够了才升级 FACT
+# CORRECT：被可靠证据反驳 → 旧事实软衰减（降置信度 + 标记失效），不删除
+
+CONF_INIT_FACT = 0.75       # 新事实初始置信度
+CONF_INIT_HYPO = 0.35       # 新假设初始置信度
+CONF_PROMOTE = 0.72         # HYPOTHESIS 升级成 FACT 的门槛
+CONF_CORRECT_DECAY = 0.45   # 被反驳时旧事实的置信度乘数
+SIM_SAME = 0.82             # 相似度 ≥ 此值：认为是同一件事
+SIM_RELATED = 0.55          # 相似度在 [此值, SIM_SAME)：相关但可能矛盾
+
+
+def _same_text(a, b):
+    """去掉标点空白和数字差异后，判断两句是不是"同一句"。
+    注意：只有内容和数字都一致才算 same；数字不同（如生日 3/5 vs 3/8）不算。"""
+    import re as _re
+    def norm(s):
+        s = _re.sub(r"[\s，。！？、,.!?；;：:'\"“”‘’（）()\[\]【】]", "", str(s))
+        return s
+    return norm(a) == norm(b)
+
+
+def apply_update(new_text, evidence, importance=0.5):
+    """把一条新抽取的事实并入记忆库，返回 (action, 说明)。
+    evidence: 0~1，模型给的"证据强度"（这句话有多确定）
+    action: maintain / profile / correct / add_fact
+    """
+    mem = load_memory()
+    mem = [_normalize(m) for m in mem]
+    now = _now()
+
+    if not mem:
+        item = _normalize({"t": new_text, "type": "FACT" if evidence >= 0.6 else "HYPOTHESIS",
+                           "conf": CONF_INIT_FACT if evidence >= 0.6 else CONF_INIT_HYPO,
+                           "i": importance, "last": now, "hits": 1, "from": now})
+        mem.append(item)
+        save_memory(mem)
+        return ("add_fact" if item["type"] == "FACT" else "profile", new_text)
+
+    # 找最相似的已有记忆
+    texts = _mem_texts(mem)
+    vecs = get_embedding(texts + [new_text])
+    new_vec = vecs[-1]
+    sims = [cosine_similarity(new_vec, v) for v in vecs[:-1]]
+    best_i = max(range(len(sims)), key=lambda i: sims[i]) if sims else -1
+    best_sim = sims[best_i] if best_i >= 0 else 0.0
+
+    # ① 高度相似 → 可能是同一件事，也可能是同一属性的不同值（矛盾）
+    #    所以不能直接 MAINTAIN，要再判一次"文本是否真的一致"
+    if best_i >= 0 and best_sim >= SIM_SAME:
+        it = mem[best_i]
+        # 文本几乎一致（去掉标点空白后相同）→ 才是真正的 MAINTAIN
+        if _same_text(it["t"], new_text):
+            it["hits"] += 1
+            it["conf"] = min(1.0, it["conf"] + 0.12 * evidence)
+            it["last"] = now
+            it["i"] = max(it["i"], importance)
+            if it["type"] == "HYPOTHESIS" and it["conf"] >= CONF_PROMOTE:
+                it["type"] = "FACT"
+            save_memory(mem)
+            return ("maintain", it["t"])
+        # 文本不同 → 让模型判断是补充还是矛盾
+        verdict = _judge_relation(it["t"], new_text)
+        if verdict == "conflict" and evidence >= 0.6:
+            it["contra"] += 1
+            it["conf"] = round(it["conf"] * CONF_CORRECT_DECAY, 3)
+            it["to"] = now
+            it["last"] = now
+            new_item = _normalize({"t": new_text, "type": "FACT",
+                                   "conf": CONF_INIT_FACT, "i": importance,
+                                   "last": now, "hits": 1, "from": now})
+            mem.append(new_item)
+            save_memory(mem)
+            return ("correct", it["t"])
+        elif verdict == "support":
+            it["hits"] += 1
+            it["conf"] = min(1.0, it["conf"] + 0.08 * evidence)
+            it["last"] = now
+            save_memory(mem)
+            return ("maintain", it["t"])
+
+    # ② 中度相似 → 相关内容：判断是"补充"还是"矛盾"
+    if best_i >= 0 and best_sim >= SIM_RELATED:
+        it = mem[best_i]
+        # 模型判断：这条新信息是在补充/细化旧事实，还是和它冲突
+        verdict = _judge_relation(it["t"], new_text)
+        if verdict == "conflict" and evidence >= 0.6:
+            # CORRECT：旧事实软衰减 + 标记失效（不删除）
+            it["contra"] += 1
+            it["conf"] = round(it["conf"] * CONF_CORRECT_DECAY, 3)
+            it["to"] = now
+            it["last"] = now
+            # 新事实作为新的当前事实加入
+            new_item = _normalize({"t": new_text, "type": "FACT",
+                                   "conf": CONF_INIT_FACT if evidence >= 0.6 else CONF_INIT_HYPO,
+                                   "i": importance, "last": now, "hits": 1, "from": now})
+            mem.append(new_item)
+            save_memory(mem)
+            return ("correct", it["t"])
+        elif verdict == "support":
+            it["hits"] += 1
+            it["conf"] = min(1.0, it["conf"] + 0.08 * evidence)
+            it["last"] = now
+            save_memory(mem)
+            return ("maintain", it["t"])
+
+    # ③ 不相似 → 新信息：证据强走 FACT，证据弱进 PROFILE 等待室
+    item = _normalize({
+        "t": new_text,
+        "type": "FACT" if evidence >= 0.6 else "HYPOTHESIS",
+        "conf": CONF_INIT_FACT if evidence >= 0.6 else CONF_INIT_HYPO,
+        "i": importance, "last": now, "hits": 1, "from": now,
+    })
+    mem.append(item)
+    save_memory(mem)
+    return ("add_fact" if item["type"] == "FACT" else "profile", new_text)
+
+
+def _judge_relation(old_fact, new_fact):
+    """判断新信息与旧事实的关系：support（补充/细化）/ conflict（矛盾）/ unrelated"""
+    prompt = (
+        "判断下面两句话的关系，只回复一个词：support、conflict 或 unrelated。\n"
+        "support = 新信息与旧事实一致或补充细化它\n"
+        "conflict = 新信息与旧事实互相矛盾（同一件事出现了不同答案）\n"
+        "unrelated = 两句话讲的是不同的事\n"
+        "不要解释，只输出一个词。\n\n"
+        f"旧事实：{old_fact}\n新信息：{new_fact}"
+    )
+    try:
+        resp = client.chat.completions.create(
+            model="qwen-plus",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            max_tokens=10,
+        )
+        v = (resp.choices[0].message.content or "").strip().lower()
+        for k in ("conflict", "support", "unrelated"):
+            if k in v:
+                return k
+    except Exception as e:
+        print("关系判断失败（不影响功能）:", e)
+    return "unrelated"
 def judge_merge(fact_a, fact_b):
     """判断两条记忆是否记录同一件事。是→返回合并后的一句话；否→只返回"否" """
     prompt = ("下面是两条关于同一用户的长期记忆。请判断它们是否记录了同一件事。\n"

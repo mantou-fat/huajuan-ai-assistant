@@ -173,10 +173,10 @@ t("会话层: 两个用户的消息/记忆/待确认/手机动作/定位/锁屏�
    and _u1.pending_lock[0] and not _u2.pending_lock[0]))
 t("会话层: 数据文件按用户分片(在 data/<sid>/ 下)", "u_001" in _u1.file("history") and _u1.file("history") != _u2.file("history"), _u1.file("history"))
 _bad_sid = []
-for _s in ["../../etc/passwd", "..\\..\\win", "a/b", "", "x" * 33, "用户A", "a b"]:
+for _s in ["../../etc/passwd", "..\\..\\win", "a/b", "", "x" * 33, "a b"]:
     try: sessions.Session(_s)
     except ValueError: _bad_sid.append(_s)
-t("会话层: 非法 sid 被拒(防目录穿越/超长/中文)", len(_bad_sid) == 7, "挡住 %d/7" % len(_bad_sid))
+t("会话层: 非法 sid 被拒(防目录穿越/超长/空格)", len(_bad_sid) == 6, "挡住 %d/6" % len(_bad_sid))
 _u1.lock.acquire(); _got = _u2.lock.acquire(timeout=0.5)
 if _got: _u2.lock.release()
 _u1.lock.release()

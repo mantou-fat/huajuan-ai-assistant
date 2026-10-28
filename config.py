@@ -16,7 +16,13 @@ HOME_FILE = "home.json"
 AUDIT_FILE = "audit.log"
 SEEN_FILE = "seen.json"
 # ---- 目录与读写范围 ----
-FILES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "huajuan_files")
+# Docker 数据卷：设了 HUAJUAN_DATA_DIR，文件盒也放进数据卷（上传的文件一起持久化）
+_DATA_BASE = os.environ.get("HUAJUAN_DATA_DIR", "").strip()
+if _DATA_BASE:
+    FILES_DIR = os.path.join(_DATA_BASE, "huajuan_files")
+    os.makedirs(FILES_DIR, exist_ok=True)   # 数据卷里提前建好文件盒，上传才不报错
+else:
+    FILES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "huajuan_files")
 READ_DIRS = [FILES_DIR, os.path.dirname(FILES_DIR)]
 EXCLUDE_FILES = [".env"]
 # ---- 对话参数 ----
