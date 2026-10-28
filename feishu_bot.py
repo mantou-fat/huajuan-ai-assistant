@@ -100,6 +100,8 @@ def send_text(chat_id, text):
         resp = client.im.v1.message.create(req)
         if not resp.success():
             print("[feishu] 发送失败:", resp.code, resp.msg)
+        else:
+            print("[feishu] 已发送 -> chat:", chat_id, "| 长度:", len(chunk), flush=True)
 
 
 def on_message(data: P2ImMessageReceiveV1) -> None:
@@ -109,6 +111,9 @@ def on_message(data: P2ImMessageReceiveV1) -> None:
         msg = event.message
         if not msg or not msg.message_id:
             return
+        # 调试日志：确认事件有没有真正送到程序里
+        print("[feishu] 收到消息:", msg.message_id, "| 类型:", getattr(msg, "message_type", "?"),
+              "| 会话:", getattr(msg, "chat_id", "?"), flush=True)
         if dedupe(msg.message_id):
             return
 
