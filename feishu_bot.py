@@ -151,7 +151,7 @@ def main():
         .register_p2_im_message_receive_v1(on_message)
         .build()
     )
-    ws = WsClient(APP_ID, APP_SECRET, handler, log_level=lark.LogLevel.INFO)
+    ws = WsClient(APP_ID, APP_SECRET, event_handler=handler, log_level=lark.LogLevel.INFO)
     print("花卷飞书机器人已启动（长连接）。在飞书里私聊或 @ 它试试～")
     ws.start()
 
