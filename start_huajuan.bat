@@ -11,4 +11,4 @@ timeout /t 1 /nobreak >nul
 
 echo [huajuan-start] %date% %time% >> D:\python\huajuan.log
 echo [Huajuan] starting...
-"D:\minicoda\envs\ai_study\python.exe" app.py >> D:\python\huajuan.log 2>&1
+"C:\Python314\python.exe" app.py >> D:\python\huajuan.log 2>&1
