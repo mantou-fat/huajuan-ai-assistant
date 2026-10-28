@@ -78,6 +78,7 @@ config.py       配置：路径、白名单、阈值、可重试工具表
 llm.py          模型客户端与密钥
 app.py          Flask 网页端：SSE 流式、TTS、登录门卫
 feishu_bot.py   飞书机器人：长连接事件订阅、消息去重、按 open_id 路由多用户会话
+qq_bot.py       QQ 机器人：OneBot 11 / NapCat 适配、群里只回 @、按 QQ 号隔离会话
 体检.py         一键自动化回归脚本（python 体检.py）
 persona.txt     人设（个人隐私，不入库；用 persona.example.txt 代替）
 knowledge_base.txt  本地知识库（个人隐私，不入库；用 knowledge_base.example.txt 代替）
@@ -167,7 +168,39 @@ python feishu_bot.py
 > 依赖：`lark-oapi`（`pip install lark-oapi`）。脚本会优先从本仓库 `.pkgs/` 加载，
 > 若没有该目录则使用全局安装的版本。
 
+## QQ 接入（OneBot 11 / NapCat）
 
+花卷也可以接进 QQ：私聊机器人，或在群里 @ 它。走 OneBot 11 协议，用 NapCat 做协议端。
+
+- **本机回环**：NapCat 的 HTTP/WS 都在 127.0.0.1，无需公网
+- **多用户隔离**：按 QQ 号映射会话（群聊按「群+人」隔离），每人独立记忆
+- **群里只回 @**：不 @ 不插话
+- **去重 + 切段**：按 message_id 去重，长回复自动分条
+
+### 步骤
+
+1. 安装 [NapCat](https://napcat.napier.uk/)（需要 NTQQ 客户端），扫码登录一个 QQ 号
+   > ⚠️ 建议用**小号**：非官方协议端有封号风险
+2. NapCat 配置开启：HTTP 服务（默认 `127.0.0.1:3000`）、WebSocket 服务（默认 `127.0.0.1:3001`）
+3. `.env` 按需配置（不配就用默认值）：
+
+```
+NAPCAT_API=http://127.0.0.1:3000
+NAPCAT_WS=ws://127.0.0.1:3001
+NAPCAT_TOKEN=        # NapCat 配了 token 才需要
+```
+
+4. 启动：
+
+```
+python qq_bot.py
+```
+
+5. QQ 里私聊机器人，或把它拉进群、@ 它说话
+
+> 依赖：`websockets`（`pip install -r requirements_qq.txt`）。
+
+## 示例玩法
 
 - "现在几点了？" / "北京今天天气怎么样？" —— 必走真实工具查询
 - "我今天买咖啡花了 18.5 元，记一下" —— 真实记账落盘
