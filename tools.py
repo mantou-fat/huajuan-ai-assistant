@@ -430,13 +430,33 @@ def _detect_city():
     return ""
 
 
+_WEATHER_ZH = [
+    ("smoky haze", "烟霾"), ("haze", "霾"), ("mist", "薄雾"), ("fog", "雾"),
+    ("partly cloudy", "多云"), ("cloudy", "多云"), ("overcast", "阴"),
+    ("patchy rain", "局部有雨"), ("light rain", "小雨"), ("moderate rain", "中雨"),
+    ("heavy rain", "大雨"), ("drizzle", "毛毛雨"), ("thunder", "雷阵雨"),
+    ("light snow", "小雪"), ("blizzard", "暴雪"), ("snow", "雪"),
+    ("sunny", "晴"), ("clear", "晴"), ("windy", "大风"),
+]
+
+
+def _zh_weather(desc):
+    low = (desc or "").lower()
+    for k, v in _WEATHER_ZH:
+        if k in low:
+            return v
+    return desc
+
+
 def get_weather(city=""):
-    """city 可省略：用户说"我这里/当前城市"时自动按 IP 定位；定位失败再引导用户说城市（不许编天气）"""
+    """city 可省略：优先浏览器定位 → 默认城市(DEFAULT_CITY) → IP 定位；都没有才反问"""
     try:
         if city and city not in ("当前", "当前城市", "我这里", "我这边", "本地", "这里"):
             query = city
         elif current().location["lat"] is not None:
             query = str(current().location["lat"]) + "," + str(current().location["lon"])
+        elif os.getenv("DEFAULT_CITY", "").strip():
+            query = os.getenv("DEFAULT_CITY").strip()
         else:
             detected = _detect_city()
             if detected:
@@ -445,7 +465,8 @@ def get_weather(city=""):
                 return "没拿到城市，也没定位信息，问一下用户想查哪里"
         r = requests.get("https://wttr.in/" + query, params={"format": "j1", "lang": "zh"}, timeout=8)
         cur = r.json()["current_condition"][0]
-        return f"查询地({query})现在{cur['lang_zh'][0]['value']}，气温{cur['temp_C']}℃，体感{cur['FeelsLikeC']}℃，湿度{cur['humidity']}%"
+        cond = _zh_weather(cur["lang_zh"][0]["value"])
+        return f"查询地({query})现在{cond}，气温{cur['temp_C']}℃，体感{cur['FeelsLikeC']}℃，湿度{cur['humidity']}%"
     except Exception as e:
         return f"查天气失败了：{e}"
 def load_reminders():
