@@ -62,8 +62,14 @@ def guard_output(text):
     return text
 
 
+CUSTOMER_SERVICE_MARKS = [
+    "需要我为你做点什么", "需要我为您做点什么", "还有什么可以帮您", "还有什么可以帮你",
+    "需要我帮你", "需要我帮您", "要不要我帮你", "要不要我帮您", "比如",
+]
+
+
 def style_violation(text):
-    """文风检测：太长、动作描写、列清单、文艺腔 → 需要压缩重写"""
+    """文风检测：太长、动作描写、列清单、文艺腔、客服腔 → 需要压缩重写"""
     if not text:
         return False
     if len(text) > 160:
@@ -73,6 +79,8 @@ def style_violation(text):
     if len(re.findall(r"\n\s*[-•*]\s", text)) >= 1:
         return True
     if text.count("——") >= 2:
+        return True
+    if any(m in text for m in CUSTOMER_SERVICE_MARKS):
         return True
     return False
 
