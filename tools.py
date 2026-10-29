@@ -56,13 +56,13 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "get_weather",
-            "description": "查询指定城市的当前天气，用户问到天气时调用",
+            "description": "查询当前天气。用户问天气时直接调用：用户说'我这里/当前城市/现在所在城市'或没指定城市，就留空或传'当前'（工具会按 IP 自动定位），不要反问用户城市。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "city": {
                         "type": "string",
-                        "description": "城市名。用户明确说了城市才填；没说就留空"
+                        "description": "城市名；用户没明确说就留空或填'当前'，工具会自动定位"
                     }
                 }
             }
@@ -408,15 +408,41 @@ def get_time():
     now = datetime.now()
     return now.strftime("%Y-%m-%d %H:%M") + " 周" + "一二三四五六日"[now.weekday()]
 
+_CITY_CACHE = {"city": "", "ts": 0}
+
+
+def _detect_city():
+    """按出口 IP 猜城市（QQ 端没有浏览器定位），缓存 1 小时"""
+    now = time.time()
+    if _CITY_CACHE["city"] and now - _CITY_CACHE["ts"] < 3600:
+        return _CITY_CACHE["city"]
+    for url in ("http://ip-api.com/json/?fields=status,city,regionName,country&lang=zh-CN",
+                "https://ipinfo.io/json"):
+        try:
+            r = requests.get(url, timeout=5)
+            d = r.json()
+            city = d.get("city") or ""
+            if city:
+                _CITY_CACHE.update(city=city, ts=now)
+                return city
+        except Exception:
+            continue
+    return ""
+
+
 def get_weather(city=""):
-    """city 可省略：没城市就看定位，再没有就引导用户说出城市（不许让模型编天气）"""
+    """city 可省略：用户说"我这里/当前城市"时自动按 IP 定位；定位失败再引导用户说城市（不许编天气）"""
     try:
-        if city:
+        if city and city not in ("当前", "当前城市", "我这里", "我这边", "本地", "这里"):
             query = city
         elif current().location["lat"] is not None:
             query = str(current().location["lat"]) + "," + str(current().location["lon"])
         else:
-            return "没拿到城市，也没定位信息，问一下用户想查哪里"
+            detected = _detect_city()
+            if detected:
+                query = detected
+            else:
+                return "没拿到城市，也没定位信息，问一下用户想查哪里"
         r = requests.get("https://wttr.in/" + query, params={"format": "j1", "lang": "zh"}, timeout=8)
         cur = r.json()["current_condition"][0]
         return f"查询地({query})现在{cur['lang_zh'][0]['value']}，气温{cur['temp_C']}℃，体感{cur['FeelsLikeC']}℃，湿度{cur['humidity']}%"
