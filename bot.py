@@ -20,7 +20,7 @@ from config import (REMINDER_FILE, KNOWLEDGE_FILE, HISTORY_FILE, MEMORY_FILE, VE
                     PROGRAM_NAMES, EXCLUDE_FILES, MAX_MESSAGES, MEMORY_MERGE_EVERY,
                     KB_STRONG, KB_WEAK)
 # 规则引擎搬家：纯规则函数从 rules.py 读（重构第二步，行为零变化）
-from rules import (clean_aside, guard_output, dangerous_block_reason, has_injection,
+from rules import (clean_aside, guard_output, dangerous_block_reason, has_injection, style_violation,
                    looks_like_vision, knowledge_hit_level, detect_hard_tool,
                    parse_remind_time, REMINDER_HINT, FILEBOX_HINT, LOCK_HINT,
                    CONFIRM_WORDS, REMINDER_EDIT_HINT, COT_HINT, PLAN_HINT)
@@ -401,6 +401,24 @@ def log_model_usage(model, user_text, reply, usage=None):
         pass
 
 
+def compress_style(text):
+    """文风兜底：太长/文艺腔的回复，压成花卷该有的两三句口语"""
+    try:
+        r = client.chat.completions.create(
+            model="qwen-flash",
+            messages=[{"role": "user", "content": (
+                "把下面这段话改写成花卷的口语回复：最多两句，像微信聊天，"
+                "不要动作/场景/心理描写，不要排比比喻，不要列表，不要文艺腔，不要括号。"
+                "只输出改写后的内容。\n\n" + text)}],
+            temperature=0.3,
+            max_tokens=120,
+        )
+        out = (r.choices[0].message.content or "").strip()
+        return out or text
+    except Exception:
+        return text
+
+
 def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=None):
     """输入问题，返回回答。print_stream=True 时边生成边打印（命令行用）"""
     # 防御：接口传进来的不一定是字符串
@@ -629,6 +647,9 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=
     full_reply = clean_aside(full_reply)
     # 安全兜底：如果回复里出现人设/系统提示原文，替换成拒绝话术
     full_reply = guard_output(full_reply)
+    # 文风兜底：太长/文艺腔 → 压成两三句口语
+    if style_violation(full_reply):
+        full_reply = clean_aside(compress_style(full_reply))
     try:
         log_model_usage(model_used, user_input, full_reply, usage_used)
     except Exception:

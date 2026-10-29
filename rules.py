@@ -62,6 +62,21 @@ def guard_output(text):
     return text
 
 
+def style_violation(text):
+    """文风检测：太长、动作描写、列清单、文艺腔 → 需要压缩重写"""
+    if not text:
+        return False
+    if len(text) > 160:
+        return True
+    if "▢" in text or "嘶啦" in text:
+        return True
+    if len(re.findall(r"\n\s*[-•*]\s", text)) >= 1:
+        return True
+    if text.count("——") >= 2:
+        return True
+    return False
+
+
 def knowledge_hit_level(text):
     """知识题信号强度：'strong'=直接注入；'weak'=要 LLM 复核；None=不是知识题"""
     low = text.lower()
