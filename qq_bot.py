@@ -41,6 +41,12 @@ from sessions import set_sid
 NAPCAT_API = os.getenv("NAPCAT_API", "http://127.0.0.1:3000").rstrip("/")
 NAPCAT_WS = os.getenv("NAPCAT_WS", "ws://127.0.0.1:3001")
 NAPCAT_TOKEN = os.getenv("NAPCAT_TOKEN", "")
+# 语音回复：auto=用户说"语音"才发；always=每条都发；off=关
+QQ_VOICE = os.getenv("QQ_VOICE", "auto")
+QQ_VOICE_NAME = os.getenv("QQ_VOICE_NAME", "Cherry")
+TTS_URL = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
+VOICE_DIR = os.path.join(BASE, "_pydir", "voices")
+os.makedirs(VOICE_DIR, exist_ok=True)
 
 MAX_CHUNK = 1500
 _seen = {}
@@ -83,6 +89,52 @@ def send_private(user_id, text):
 
 def send_group(group_id, text):
     api("/send_group_msg", {"group_id": group_id, "message": text})
+
+
+def tts_to_file(text, path):
+    """用 qwen-tts 把文字合成语音，存成 wav；失败返回 None"""
+    key = os.getenv("DASHSCOPE_API_KEY")
+    if not key:
+        return None
+    body = {
+        "model": "qwen3-tts-flash",
+        "input": {"text": text[:200], "voice": QQ_VOICE_NAME},
+        "parameters": {"format": "wav", "sample_rate": 24000},
+    }
+    req = requests.post(TTS_URL, json=body, timeout=60,
+                        headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"})
+    resp = req.json()
+    audio = (resp.get("output") or {}).get("audio") or {}
+    url = audio.get("url")
+    if url:
+        data = requests.get(url, timeout=60).content
+        with open(path, "wb") as f:
+            f.write(data)
+        return path
+    if audio.get("data"):
+        with open(path, "wb") as f:
+            f.write(audio["data"])
+        return path
+    print("[qq] TTS 返回异常:", str(resp)[:200], flush=True)
+    return None
+
+
+def send_voice_private(user_id, path):
+    api("/send_private_msg", {"user_id": user_id,
+                              "message": [{"type": "record", "data": {"file": "file:///" + path.replace("\\", "/")}}]})
+
+
+def send_voice_group(group_id, path):
+    api("/send_group_msg", {"group_id": group_id,
+                            "message": [{"type": "record", "data": {"file": "file:///" + path.replace("\\", "/")}}]})
+
+
+def wants_voice(text):
+    if QQ_VOICE == "off":
+        return False
+    if QQ_VOICE == "always":
+        return True
+    return any(k in text for k in ["语音", "说给我听", "念给我听", "读给我听", "用说的"])
 
 
 def extract_text(message, self_id):
@@ -144,6 +196,20 @@ def handle_message(data):
         reply = bot.get_reply(text)
     except Exception as e:  # noqa: BLE001
         reply = "花卷这边出了点问题：%s" % e
+
+    # 语音回复：用户说"发语音/说给我听"，或 QQ_VOICE=always
+    if wants_voice(text):
+        path = os.path.join(VOICE_DIR, "qq_voice_%d_%d.wav" % (int(time.time()), int(uid) % 10000))
+        try:
+            if tts_to_file(reply, path):
+                if mtype == "group":
+                    send_voice_group(gid, path)
+                else:
+                    send_voice_private(uid, path)
+                print("[qq] 已语音回复 ->", path, flush=True)
+                return
+        except Exception as e:  # noqa: BLE001
+            print("[qq] 语音失败，回退文字:", e, flush=True)
 
     for chunk in split_text(reply):
         if mtype == "group":

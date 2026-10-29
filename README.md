@@ -203,6 +203,8 @@ python qq_bot.py
 
 5. QQ 里私聊机器人，或把它拉进群、@ 它说话
 
+**语音回复**：对花卷说"**发语音**""说给我听"，它会用 qwen3-tts 合成语音，以 QQ 语音条回复（`QQ_VOICE=always` 可让每条都发语音，`off` 关闭；音色用 `QQ_VOICE_NAME` 配，默认 Cherry）。
+
 > 依赖：`websockets`（`pip install -r requirements_qq.txt`）。
 
 ## 质量保障：全链路评测（evals/）
