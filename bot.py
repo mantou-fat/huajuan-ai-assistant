@@ -142,12 +142,27 @@ def create_stream(messages, tools=TOOLS,on_text=None,model="qwen-plus", tool_cho
         for _, p in sorted(pieces.items())
     ]
     return {"content": content, "tool_calls": tcs, "finish_reason": finish, "usage": usage}
+OWNER_LINE = ("【身份提示】现在和你说话的人就是馒头本人。他是你最亲近的人、平等的搭档："
+              "不要用第三人称谈论他，不要把他当成'朋友之一'或别人；"
+              "对他亲切、感激，但不卑微，不叫主人/父亲/老板。")
+
+
+def system_prompt():
+    """人设 + 身份提示（馒头本人会话才加）"""
+    try:
+        if getattr(current(), "is_owner", False):
+            return SYSTEM_PROMPT + "\n" + OWNER_LINE
+    except Exception:
+        pass
+    return SYSTEM_PROMPT
+
+
 def load_history():
     try:
         with open(current().file("history"), "r", encoding="utf-8") as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
-        return [{"role": "system", "content": SYSTEM_PROMPT}]
+        return [{"role": "system", "content": system_prompt()}]
 
 def save_history(messages):
     with open(current().file("history"), "w", encoding="utf-8") as f:
@@ -156,7 +171,7 @@ def save_history(messages):
 def clear_history():
     msgs = current().messages          # 清当前用户的历史，不是全局那份
     with chat_lock:
-        msgs[:] = [{"role": "system", "content": SYSTEM_PROMPT}]
+        msgs[:] = [{"role": "system", "content": system_prompt()}]
         # 清空对话后重新注入近况和记忆，否则花卷会"失忆"到下次重启
         s = load_status()
         if s.get("status"):
@@ -440,6 +455,11 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=
     messages = current().messages       # 本用户自己的对话历史（不是全局那份）
     current().phone_actions.clear()
     with chat_lock:  # 防止多线程并发时 messages 串话
+        # 每轮刷新系统消息：身份提示（馒头本人）随会话变化，必须实时生效
+        if messages and messages[0].get("role") == "system":
+            messages[0] = {"role": "system", "content": system_prompt()}
+        else:
+            messages.insert(0, {"role": "system", "content": system_prompt()})
         user_msg = user_input
         # 错别字识别：先词典(免费快)再 LLM(认词典外的)，认出后按正字理解，回复自然（别当面挑用户错字）
         _typos = check_typos(user_msg)
@@ -716,9 +736,9 @@ messages[:] = load_history()
 # 人设永远以 persona.txt 为准：history.json 里可能存着旧人设，直接覆盖成最新读到的，
 # 否则改了 persona.txt 重启也看不到效果（这是"persona 新内容读不到"的根因）
 if messages and messages[0].get("role") == "system":
-    messages[0] = {"role": "system", "content": SYSTEM_PROMPT}
+    messages[0] = {"role": "system", "content": system_prompt()}
 else:
-    messages.insert(0, {"role": "system", "content": SYSTEM_PROMPT})
+    messages.insert(0, {"role": "system", "content": system_prompt()})
 # 清掉上次运行时注入的近况/心情/记忆 system 消息，只保留第一条人设，
 # 防止每重启一次程序就多攒一份，越积越多把对话撑爆
 if len(messages) > 1:

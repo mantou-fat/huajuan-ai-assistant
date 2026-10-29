@@ -37,6 +37,10 @@ def guard():
         return jsonify({"error": "未授权：访问钥匙不对"}), 401
     # 身份没问题：把用户名绑到本次请求的会话上下文
     set_sid(user)
+    try:
+        current().is_owner = (user == "馒头")
+    except Exception:
+        pass
     return None
 LOGIN_PAGE = """<!DOCTYPE html><html lang="zh"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0"><title>花卷 · 进门</title>

@@ -38,7 +38,7 @@ import requests
 import websockets
 
 import bot
-from sessions import set_sid
+from sessions import set_sid, current
 from config import FILES_DIR
 
 NAPCAT_API = os.getenv("NAPCAT_API", "http://127.0.0.1:3000").rstrip("/")
@@ -254,6 +254,10 @@ def handle_message(data):
     before_docs = _doc_snapshot()
     try:
         set_sid(sid)
+        try:
+            current().is_owner = bool(QQ_OWNER_UID) and str(uid) == str(QQ_OWNER_UID)
+        except Exception:
+            pass
         reply = bot.get_reply(text)
     except Exception as e:  # noqa: BLE001
         reply = "花卷这边出了点问题：%s" % e

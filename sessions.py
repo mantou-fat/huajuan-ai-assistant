@@ -65,6 +65,7 @@ class Session:
         self.messages = []                     # 对话历史（原来是 bot.messages）
         self.mem = []                          # 长期记忆（原来是 memory.mem）
         self.mem_embeddings = None             # 记忆向量缓存（原来是 memory._mem_embeddings）
+        self.is_owner = False                  # 这个会话是不是馒头本人（身份提示用）
         self.last_merge_len = None             # 上次合并时的记忆条数（原来是 memory._last_merge_len）
         self.status = {}                       # 花卷的近况
         self.mood = {}                         # 花卷的心情
