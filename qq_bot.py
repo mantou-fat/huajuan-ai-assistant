@@ -230,6 +230,15 @@ def handle_message(data):
     sid = sid_for(scope, uid)
 
     print("[qq] 收到消息:", mid, "|", mtype, "| from:", uid, "|", text[:40], flush=True)
+    # 写歌要 1 分多钟，先回一句"在写了"，别让对方干等
+    if any(k in text for k in ["唱首歌", "唱歌", "点歌", "写首歌", "唱一首", "来一首"]):
+        try:
+            if mtype == "group":
+                send_group(gid, "好，在写了，等我一下～")
+            else:
+                send_private(uid, "好，在写了，等我一下～")
+        except Exception:
+            pass
     before_docs = _doc_snapshot()
     try:
         set_sid(sid)
