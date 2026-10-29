@@ -58,7 +58,7 @@ _seen_lock = threading.Lock()
 QQ_PROACTIVE = os.getenv("QQ_PROACTIVE", "0")
 QQ_OWNER_UID = os.getenv("QQ_OWNER_UID", "")
 QQ_PROACTIVE_MIN = float(os.getenv("QQ_PROACTIVE_MIN_HOURS", "2"))
-QQ_PROACTIVE_MAX = float(os.getenv("QQ_PROACTIVE_MAX_HOURS", "8"))
+QQ_PROACTIVE_MAX = float(os.getenv("QQ_PROACTIVE_MAX_HOURS", "72"))
 _last_activity = time.time()
 _next_proactive_at = 0.0
 
@@ -252,9 +252,20 @@ def handle_message(data):
 
 
 def _next_gap():
-    """随机间隔：MIN~MAX 小时之间"""
-    lo, hi = sorted((QQ_PROACTIVE_MIN, QQ_PROACTIVE_MAX))
-    return random.uniform(max(0.17, lo), max(lo, hi)) * 3600
+    """随机间隔（2小时~3天）：短间隔概率更高，偶尔隔两三天，像真人"""
+    lo = max(0.17, QQ_PROACTIVE_MIN)
+    hi = max(lo, QQ_PROACTIVE_MAX)
+
+    def span(a, b):
+        a, b = max(a, lo), min(b, hi)
+        return random.uniform(lo, hi) if a >= b else random.uniform(a, b)
+
+    r = random.random()
+    if r < 0.6:      # 60%：2~12 小时
+        return span(lo, 12) * 3600
+    if r < 0.85:     # 25%：12~36 小时
+        return span(12, 36) * 3600
+    return span(36, hi) * 3600   # 15%：36 小时~3 天
 
 
 def proactive_loop():
