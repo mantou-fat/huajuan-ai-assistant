@@ -495,13 +495,13 @@ def dispatch_agent(agent, task):
 def generate_song(theme):
     """花卷点歌：自己写词，Fun-Music 谱曲演唱，下载到本地返回播放地址"""
     try:
-        # 第1步：花卷自己写歌词（带结构标签，控制在300字内）
+        # 第1步：花卷自己写歌词（Fun-Music 限制中文 ≤350 字，这里按 200 字写，留余量）
         lyric_resp = client.chat.completions.create(
             model="qwen-plus",
             messages=[{"role": "user", "content": (
                 "你是歌手花卷，根据下面的主题写一首中文歌词。"
                 "要求：用[verse]标记主歌、[chorus]标记副歌、[bridge]标记桥段，"
-                "全曲不超过300字，直接输出歌词，不要客套。\n\n主题：" + theme
+                "全曲不超过180字（很重要，超了接口会拒绝），直接输出歌词，不要客套。\n\n主题：" + theme
             )}],
             temperature=0.8,
             max_tokens=800,
@@ -509,6 +509,23 @@ def generate_song(theme):
         lyrics = lyric_resp.choices[0].message.content.strip()
         if not lyrics:
             return "歌词没写成，再说一次试试？"
+        # 超长兜底：超过 330 字让模型压缩一次，还超就硬截断
+        if len(lyrics) > 330:
+            try:
+                shrink = client.chat.completions.create(
+                    model="qwen-plus",
+                    messages=[{"role": "user", "content": (
+                        "把下面歌词压缩到180字以内，保留[verse][chorus][bridge]标签，只输出歌词：\n\n" + lyrics
+                    )}],
+                    temperature=0.3,
+                    max_tokens=400,
+                ).choices[0].message.content.strip()
+                if shrink:
+                    lyrics = shrink
+            except Exception:
+                pass
+        if len(lyrics) > 350:
+            lyrics = lyrics[:350]
         # 第2步：调 Fun-Music 生成歌曲（prompt 和 lyrics 同传只认 lyrics，所以只传歌词）
         r = requests.post(
             "https://" + workspace_id + ".cn-beijing.maas.aliyuncs.com/api/v1/services/audio/music/generation",
@@ -517,22 +534,38 @@ def generate_song(theme):
                 "model": "fun-music-v1",
                 "input": {"lyrics": lyrics, "gender": "female"},
             },
-            timeout=120,   # 生成一首歌要几十秒到两分钟
+            timeout=180,   # 生成一首歌要几十秒到两分钟
         )
         data = r.json()
+        if "output" not in data or "audio" not in (data.get("output") or {}):
+            return "唱歌失败：" + str(data.get("message") or data)[:150]
         audio_url = data["output"]["audio"]["url"]
         # 第3步：下载到本地（线上链接24小时就失效，必须存下来）
         song_resp = requests.get(audio_url, timeout=120)
         filename = "song_" + hashlib.md5(theme.encode()).hexdigest()[:8] + ".mp3"
-        with open(os.path.join("static", filename), "wb") as f:
-            f.write(song_resp.content)
+        play_path = "/static/" + filename
+        try:
+            os.makedirs("static", exist_ok=True)
+            with open(os.path.join("static", filename), "wb") as f:
+                f.write(song_resp.content)
+        except Exception:
+            # 沙箱/权限不允许写 static 时，落到 _pydir/songs（QQ 端仍可发送）
+            alt_dir = os.path.join("_pydir", "songs")
+            os.makedirs(alt_dir, exist_ok=True)
+            alt = os.path.join(alt_dir, filename)
+            with open(alt, "wb") as f:
+                f.write(song_resp.content)
+            play_path = os.path.abspath(alt)
         # 第4步：歌词也存一份到文件盒，否则以后用户要歌词只能瞎编（之前的 bug 就在这）
         lyric_name = "歌词_" + filename[:-4] + ".txt"
-        with open(os.path.join(FILES_DIR, lyric_name), "w", encoding="utf-8") as f:
-            f.write(lyrics)
-        return ("唱好了！播放地址：/static/" + filename + "\n"
+        try:
+            with open(os.path.join(FILES_DIR, lyric_name), "w", encoding="utf-8") as f:
+                f.write(lyrics)
+        except Exception:
+            pass
+        return ("唱好了！播放地址：" + play_path + "\n"
                 "这首歌的歌词如下（原样记住，用户要歌词就念这份，一个字都不许另写或瞎编）：\n" + lyrics + "\n"
-                "【必须】回复里原样带上播放地址 /static/" + filename + "；并告诉用户歌词已存进文件盒「" + lyric_name + "」，以后要歌词就 read_file 读这个文件。")
+                "【必须】回复里原样带上播放地址 " + play_path + "；并告诉用户歌词已存进文件盒「" + lyric_name + "」，以后要歌词就 read_file 读这个文件。")
     except Exception as e:
         return "唱歌失败：" + str(e)
 def read_webpage_browser(url):

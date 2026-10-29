@@ -52,6 +52,13 @@ MAX_CHUNK = 1500
 _seen = {}
 _seen_lock = threading.Lock()
 
+# 主动消息：QQ_PROACTIVE=1 开启；QQ_OWNER_UID 填接收人 QQ；静默超过 N 小时发一条
+QQ_PROACTIVE = os.getenv("QQ_PROACTIVE", "0")
+QQ_OWNER_UID = os.getenv("QQ_OWNER_UID", "")
+QQ_PROACTIVE_HOURS = float(os.getenv("QQ_PROACTIVE_HOURS", "6"))
+_last_activity = time.time()
+_last_proactive = 0.0
+
 
 def dedupe(message_id):
     now = time.time()
@@ -169,11 +176,13 @@ def split_text(text, n=MAX_CHUNK):
 
 def handle_message(data):
     """处理一条 OneBot 消息事件（同步，跑在线程池里）"""
+    global _last_activity
     if data.get("post_type") != "message":
         return
     mtype = data.get("message_type")
     if mtype not in ("private", "group"):
         return
+    _last_activity = time.time()
     mid = data.get("message_id")
     if mid is None or dedupe(mid):
         return
@@ -211,6 +220,26 @@ def handle_message(data):
         except Exception as e:  # noqa: BLE001
             print("[qq] 语音失败，回退文字:", e, flush=True)
 
+    # 唱歌：回复里带歌曲文件路径 → 把 mp3 当语音条发过去，文字只留一句话
+    song = re.search(r"(/static/song_[0-9a-fA-F]+\.mp3|[A-Za-z]:\\[^\s\"']+\.mp3)", reply)
+    if song:
+        spath = song.group(1)
+        if not os.path.isabs(spath):
+            spath = os.path.join(BASE, spath.lstrip("/").replace("/", os.sep))
+        if os.path.exists(spath):
+            try:
+                if mtype == "group":
+                    send_voice_group(gid, spath)
+                else:
+                    send_voice_private(uid, spath)
+                caption = reply.replace(song.group(1), "").strip()
+                caption = "\n".join(l for l in caption.split("\n") if l.strip())
+                send_private(uid, caption[:800]) if mtype != "group" else send_group(gid, caption[:800])
+                print("[qq] 已发歌 ->", spath, flush=True)
+                return
+            except Exception as e:  # noqa: BLE001
+                print("[qq] 发歌失败，回退文字:", e, flush=True)
+
     for chunk in split_text(reply):
         if mtype == "group":
             send_group(gid, chunk)
@@ -219,8 +248,33 @@ def handle_message(data):
     print("[qq] 已回复 ->", "群" + str(gid) if mtype == "group" else "私聊" + str(uid), flush=True)
 
 
+def proactive_loop():
+    """静默太久就主动发一条（默认关闭，QQ_PROACTIVE=1 开启）"""
+    global _last_proactive
+    while True:
+        time.sleep(300)
+        if QQ_PROACTIVE != "1" or not QQ_OWNER_UID:
+            continue
+        idle = time.time() - _last_activity
+        if idle < QQ_PROACTIVE_HOURS * 3600:
+            continue
+        if time.time() - _last_proactive < QQ_PROACTIVE_HOURS * 3600:
+            continue
+        try:
+            set_sid(sid_for("p", QQ_OWNER_UID))
+            msg = bot.get_greeting()
+            if not msg:
+                msg = "在忙吗？我在这儿呢。"
+            send_private(int(QQ_OWNER_UID), msg)
+            _last_proactive = time.time()
+            print("[qq] 主动消息 ->", QQ_OWNER_UID, msg[:40], flush=True)
+        except Exception as e:  # noqa: BLE001
+            print("[qq] 主动消息失败:", e, flush=True)
+
+
 async def main():
     print("花卷 QQ 机器人启动，连接 NapCat:", NAPCAT_WS)
+    threading.Thread(target=proactive_loop, daemon=True).start()
     loop = asyncio.get_running_loop()
     while True:
         try:
