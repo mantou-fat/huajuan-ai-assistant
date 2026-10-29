@@ -204,6 +204,18 @@ def _new_doc(before):
     return max(fresh, key=os.path.getmtime)
 
 
+def _song_caption(reply, path):
+    """发歌时保留回复里的其他内容（比如天气），只去掉歌的路径/说明"""
+    keep = []
+    for line in reply.splitlines():
+        if path in line or "播放地址" in line or "歌词已" in line or "文件盒" in line or "【必须】" in line:
+            continue
+        line = line.strip()
+        if line:
+            keep.append(line)
+    return "\n".join(keep).strip() or "唱好啦，听听～"
+
+
 def handle_message(data):
     """处理一条 OneBot 消息事件（同步，跑在线程池里）"""
     global _last_activity
@@ -273,7 +285,7 @@ def handle_message(data):
                     send_voice_group(gid, spath)
                 else:
                     send_voice_private(uid, spath)
-                send_private(uid, "唱好啦，听听～") if mtype != "group" else send_group(gid, "唱好啦，听听～")
+                send_private(uid, _song_caption(reply, spath)) if mtype != "group" else send_group(gid, _song_caption(reply, spath))
                 print("[qq] 已发歌 ->", spath, flush=True)
                 return
             except Exception as e:  # noqa: BLE001
