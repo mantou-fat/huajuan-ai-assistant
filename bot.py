@@ -89,7 +89,7 @@ def auto_map_reduce(text):
             "（请基于以上分块摘要回答用户的问题：把重复的要点合并，按用户要求的格式输出最终答案，别逐字啃原文）"
             % (len(blocks), digest))
 def create_stream(messages, tools=TOOLS,on_text=None,model="qwen-plus", tool_choice="auto"):
-    stream = client.chat.completions.create(
+    kwargs = dict(
         model=model,
         messages=messages,
         temperature=0.8,
@@ -100,6 +100,15 @@ def create_stream(messages, tools=TOOLS,on_text=None,model="qwen-plus", tool_cho
         stream=True,
         stream_options={"include_usage": True},
     )
+    try:
+        stream = client.chat.completions.create(**kwargs)
+    except Exception as e:
+        # 小模型偶尔把工具参数写成非法 JSON；换 plus 重试一次
+        if model != "qwen-plus" and ("function.arguments" in str(e) or "InvalidParameter" in str(e)):
+            kwargs["model"] = "qwen-plus"
+            stream = client.chat.completions.create(**kwargs)
+        else:
+            raise
     content = ""
     pieces = {}
     finish = None

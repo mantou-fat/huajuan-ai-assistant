@@ -28,6 +28,7 @@ import random
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE)
+sys.path.insert(0, os.path.join(BASE, ".pkgs"))
 
 from dotenv import load_dotenv
 
@@ -38,6 +39,7 @@ import websockets
 
 import bot
 from sessions import set_sid
+from config import FILES_DIR
 
 NAPCAT_API = os.getenv("NAPCAT_API", "http://127.0.0.1:3000").rstrip("/")
 NAPCAT_WS = os.getenv("NAPCAT_WS", "ws://127.0.0.1:3001")
@@ -177,6 +179,31 @@ def split_text(text, n=MAX_CHUNK):
     return [text[i:i + n] for i in range(0, len(text), n)] or [""]
 
 
+def _doc_snapshot():
+    """记录文档目录里 pdf/pptx/docx 的修改时间，用于判断这轮有没有新生成文件"""
+    dirs = [FILES_DIR, os.path.join(BASE, "huajuan_files"), os.path.join(BASE, "_pydir", "docs")]
+    out = {}
+    for d in dirs:
+        if not os.path.isdir(d):
+            continue
+        for f in os.listdir(d):
+            if f.lower().endswith((".pdf", ".pptx", ".docx")):
+                p = os.path.join(d, f)
+                try:
+                    out[p] = os.path.getmtime(p)
+                except OSError:
+                    pass
+    return out
+
+
+def _new_doc(before):
+    after = _doc_snapshot()
+    fresh = [p for p, m in after.items() if p not in before or m > before.get(p, 0) + 0.5]
+    if not fresh:
+        return None
+    return max(fresh, key=os.path.getmtime)
+
+
 def handle_message(data):
     """处理一条 OneBot 消息事件（同步，跑在线程池里）"""
     global _last_activity
@@ -203,11 +230,13 @@ def handle_message(data):
     sid = sid_for(scope, uid)
 
     print("[qq] 收到消息:", mid, "|", mtype, "| from:", uid, "|", text[:40], flush=True)
+    before_docs = _doc_snapshot()
     try:
         set_sid(sid)
         reply = bot.get_reply(text)
     except Exception as e:  # noqa: BLE001
         reply = "花卷这边出了点问题：%s" % e
+    fresh_doc = _new_doc(before_docs)
 
     # 语音回复：用户说"发语音/说给我听"，或 QQ_VOICE=always
     if wants_voice(text):
@@ -242,6 +271,30 @@ def handle_message(data):
                 return
             except Exception as e:  # noqa: BLE001
                 print("[qq] 发歌失败，回退文字:", e, flush=True)
+
+    # 文档：这轮新生成了 pdf/pptx/docx → 当文件发过去（兜底：回复里带路径）
+    doc = re.search(r"([A-Za-z]:\\[^\s\"'）)]+\.(?:pdf|pptx|docx))", reply, re.I)
+    fpath = fresh_doc
+    if not fpath and doc and os.path.exists(doc.group(1)):
+        fpath = doc.group(1)
+    if fpath and os.path.exists(fpath):
+        fname = os.path.basename(fpath)
+        try:
+            if mtype == "group":
+                api("/upload_group_file", {"group_id": gid, "file": fpath, "name": fname})
+            else:
+                api("/upload_private_file", {"user_id": uid, "file": fpath, "name": fname})
+            caption = reply.replace(fpath, "").strip()
+            caption = "\n".join(l for l in caption.split("\n") if l.strip())
+            if caption:
+                if mtype == "group":
+                    send_group(gid, caption[:800])
+                else:
+                    send_private(uid, caption[:800])
+            print("[qq] 已发文件 ->", fpath, flush=True)
+            return
+        except Exception as e:  # noqa: BLE001
+            print("[qq] 发文件失败，回退文字:", e, flush=True)
 
     for chunk in split_text(reply):
         if mtype == "group":

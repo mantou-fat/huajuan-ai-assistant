@@ -738,6 +738,17 @@ def write_file(filename, content, confirm=False):
         return "已写入「" + filename + "」"
     except Exception as e:
         return "写文件失败：" + str(e)
+def _office_write(path, writer):
+    """写文件盒；权限不够时落到 _pydir/docs（沙箱/只读盘下也能生成）"""
+    try:
+        return path, writer(path)
+    except PermissionError:
+        alt_dir = os.path.join("_pydir", "docs")
+        os.makedirs(alt_dir, exist_ok=True)
+        alt = os.path.abspath(os.path.join(alt_dir, os.path.basename(path)))
+        return alt, writer(alt)
+
+
 def make_pdf(md, title="", filename="huajuan_output.pdf"):
     """把 markdown 排成 PDF，输出到文件盒。返回结果字符串。"""
     if not filename.lower().endswith(".pdf"):
@@ -753,8 +764,8 @@ def make_pdf(md, title="", filename="huajuan_output.pdf"):
                 s = line.strip()
                 if s.startswith("# "):
                     title = s[2:].strip(); break
-        n = md_to_pdf(path, md.splitlines(), title=title)
-        return "已生成 PDF「" + filename + "」到文件盒，共 " + str(n) + " 页"
+        real, n = _office_write(path, lambda p: md_to_pdf(p, md.splitlines(), title=title))
+        return "已生成 PDF「" + filename + "」（" + real + "），共 " + str(n) + " 页"
     except Exception as e:
         return "生成 PDF 失败：" + str(e)
 def make_ppt(md, title="", filename="huajuan_output.pptx"):
@@ -772,8 +783,8 @@ def make_ppt(md, title="", filename="huajuan_output.pptx"):
                 s = line.strip()
                 if s.startswith("# "):
                     title = s[2:].strip(); break
-        n = md_to_ppt(path, md.splitlines(), title=title)
-        return "已生成 PPT「" + filename + "」到文件盒，共 " + str(n) + " 页"
+        real, n = _office_write(path, lambda p: md_to_ppt(p, md.splitlines(), title=title))
+        return "已生成 PPT「" + filename + "」（" + real + "），共 " + str(n) + " 页"
     except Exception as e:
         return "生成 PPT 失败：" + str(e)
 def make_docx(md, title="", filename="huajuan_output.docx"):
@@ -791,8 +802,8 @@ def make_docx(md, title="", filename="huajuan_output.docx"):
                 s = line.strip()
                 if s.startswith("# "):
                     title = s[2:].strip(); break
-        n = md_to_docx(path, md.splitlines(), title=title)
-        return "已生成 Word「" + filename + "」到文件盒，共 " + str(n) + " 段"
+        real, n = _office_write(path, lambda p: md_to_docx(p, md.splitlines(), title=title))
+        return "已生成 Word「" + filename + "」（" + real + "），共 " + str(n) + " 段"
     except Exception as e:
         return "生成 Word 失败：" + str(e)
 def set_reminder(remind_time, content):
