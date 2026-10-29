@@ -35,6 +35,8 @@ _fsdata/
 _qqdata/
 evals/_data/
 evals/results/
+evals/_auto_data/
+evals/nightly.log
 .vscode/
 screenshots/
 video_frames/

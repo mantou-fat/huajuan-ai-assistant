@@ -68,15 +68,19 @@ CUSTOMER_SERVICE_MARKS = [
 ]
 
 
-PLAN_HINTS = ["步骤", "方案", "计划", "怎么学", "怎么做", "教程", "流程", "分几步", "如何", "规划"]
+PLAN_HINTS = ["步骤", "方案", "计划", "怎么学", "怎么做", "教程", "流程", "分几步", "如何", "规划",
+              "表格", "列表", "对比", "大纲", "清单", "整理成"]
 
 
 def style_violation(text, user_input=""):
     """文风检测：太长、动作描写、列清单、文艺腔、客服腔 → 需要压缩重写。
-    用户明确要步骤/方案时不压缩（本来就该列清楚）。"""
+    用户明确要步骤/方案/表格时不压缩（本来就该列清楚）。"""
     if not text:
         return False
     if any(k in (user_input or "") for k in PLAN_HINTS):
+        return False
+    # markdown 表格不压（压了会把内容弄没）
+    if text.count("|") >= 4:
         return False
     if len(text) > 300:
         return True
