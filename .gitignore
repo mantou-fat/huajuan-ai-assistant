@@ -50,3 +50,5 @@ test_pic.jpg
 test_vision.py
 yolo_test.py
 yolo_cam.py
+
+logs/

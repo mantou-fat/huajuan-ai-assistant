@@ -25,6 +25,36 @@ PERSONA_LEAK_MARKS = [
 ]
 
 
+# ===== 安全：危险工具 + 注入检测 =====
+DANGEROUS_TOOLS = {"take_screenshot", "lock_screen", "look_around", "open_program", "control_device"}
+
+INJECTION_MARKS = [
+    "忽略之前", "忽略所有指令", "忽略你的规则", "忽略规则", "无视你的", "无视规则",
+    "假装你是", "你现在是黑客", "黑客助手", "偷看", "偷窥", "绕过限制", "绕过你的",
+    "不用确认", "无需确认", "直接执行", "越狱", "system prompt", "系统提示词", "你的设定原文",
+]
+
+BLOCKED_EXE = ["cmd.exe", "powershell", "regedit", "taskkill", "format.com", "diskpart",
+               "shutdown", "net user", "certutil", "bitsadmin"]
+
+
+def has_injection(text):
+    """用户输入里有没有越权/注入信号"""
+    low = (text or "").lower()
+    return any(m.lower() in low for m in INJECTION_MARKS)
+
+
+def dangerous_block_reason(tool_name, user_input, args=None):
+    """危险工具执行前的代码级拦截，返回拦截原因；None 表示放行"""
+    if tool_name in DANGEROUS_TOOLS and has_injection(user_input):
+        return "【已拦截】这条消息像是在诱导我越权操作，我不执行。"
+    if tool_name == "open_program" and args:
+        s = str(args).lower()
+        if any(b in s for b in BLOCKED_EXE):
+            return "【已拦截】不允许打开命令行/系统工具。"
+    return None
+
+
 def guard_output(text):
     """输出兜底：有人设/系统提示原文就拒绝，避免被套话泄露"""
     if any(m in text for m in PERSONA_LEAK_MARKS):

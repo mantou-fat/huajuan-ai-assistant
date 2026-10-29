@@ -20,7 +20,8 @@ from config import (REMINDER_FILE, KNOWLEDGE_FILE, HISTORY_FILE, MEMORY_FILE, VE
                     PROGRAM_NAMES, EXCLUDE_FILES, MAX_MESSAGES, MEMORY_MERGE_EVERY,
                     KB_STRONG, KB_WEAK)
 # 规则引擎搬家：纯规则函数从 rules.py 读（重构第二步，行为零变化）
-from rules import (clean_aside, guard_output, looks_like_vision, knowledge_hit_level, detect_hard_tool,
+from rules import (clean_aside, guard_output, dangerous_block_reason, has_injection,
+                   looks_like_vision, knowledge_hit_level, detect_hard_tool,
                    parse_remind_time, REMINDER_HINT, FILEBOX_HINT, LOCK_HINT,
                    CONFIRM_WORDS, REMINDER_EDIT_HINT, COT_HINT, PLAN_HINT)
 from dotenv import load_dotenv
@@ -96,12 +97,18 @@ def create_stream(messages, tools=TOOLS,on_text=None,model="qwen-plus", tool_cho
         top_p=0.9,
         tools=tools,
         tool_choice=tool_choice,
-        stream=True
+        stream=True,
+        stream_options={"include_usage": True},
     )
     content = ""
     pieces = {}
     finish = None
+    usage = None
     for chunk in stream:
+        if getattr(chunk, "usage", None):
+            usage = chunk.usage
+        if not chunk.choices:
+            continue
         ch = chunk.choices[0]
         if ch.delta.content:
             content += ch.delta.content
@@ -125,7 +132,7 @@ def create_stream(messages, tools=TOOLS,on_text=None,model="qwen-plus", tool_cho
         }
         for _, p in sorted(pieces.items())
     ]
-    return {"content": content, "tool_calls": tcs, "finish_reason": finish}
+    return {"content": content, "tool_calls": tcs, "finish_reason": finish, "usage": usage}
 def load_history():
     try:
         with open(current().file("history"), "r", encoding="utf-8") as f:
@@ -362,6 +369,38 @@ def reflect_on_reply(user_input, reply):
     except Exception:
         return ""
 
+TOOL_HINTS = ["查", "搜", "算", "写", "翻译", "派", "提醒", "记", "打开", "截屏", "锁",
+              "天气", "几点", "时间", "文件", "知识", "?", "？", "歌", "PPT", "PDF", "Word"]
+
+
+def pick_model(text, image=None):
+    """模型路由：简单闲聊走 turbo（便宜快），要工具/知识/长输入走 plus"""
+    if image:
+        return "qwen-vl-max"
+    if os.getenv("MODEL_ROUTER", "1") == "0":
+        return "qwen-plus"
+    t = (text or "").strip()
+    if len(t) <= 20 and not any(k in t for k in TOOL_HINTS):
+        return "qwen-flash"
+    return "qwen-plus"
+
+
+def log_model_usage(model, user_text, reply, usage=None):
+    """记录模型用量，便于统计路由效果/成本"""
+    try:
+        os.makedirs("logs", exist_ok=True)
+        rec = {"ts": time.strftime("%Y-%m-%d %H:%M:%S"), "model": model,
+               "in_chars": len(user_text or ""), "out_chars": len(reply or "")}
+        if usage is not None:
+            rec["prompt_tokens"] = getattr(usage, "prompt_tokens", None)
+            rec["completion_tokens"] = getattr(usage, "completion_tokens", None)
+            rec["total_tokens"] = getattr(usage, "total_tokens", None)
+        with open(os.path.join("logs", "model_usage.jsonl"), "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
 def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=None):
     """输入问题，返回回答。print_stream=True 时边生成边打印（命令行用）"""
     # 防御：接口传进来的不一定是字符串
@@ -493,9 +532,12 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=
     failed = False
     turn_tools = []# 本轮依次调过的工具名（整轮审计用）
     steps = 0            # ← 新增：轮数计数提前到 try 外面（异常时也有定义）  
+    usage_used = None
+    model_used = None
     try:
             base = len(messages)
-            result = create_stream(messages_to_send, on_text=on_text,model="qwen-vl-max"if image else "qwen-plus", tool_choice=force_tool)
+            model_used = pick_model(user_input, image)
+            result = create_stream(messages_to_send, on_text=on_text, model=model_used, tool_choice=force_tool)
             steps = 0
             while (result["finish_reason"] == "tool_calls" or result["tool_calls"]) and steps < 5:
                 steps += 1
@@ -525,6 +567,11 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=
                     if fn is None:
                         audit_log(name, raw, "没有这个工具", ok=False)   # 出口2
                         return tc["id"], f"没有这个工具：{name}"
+                    # 安全闸：危险工具 + 注入信号 → 代码级拦截（不依赖模型自觉）
+                    reason = dangerous_block_reason(name, user_input, args)
+                    if reason:
+                        audit_log(name, args, reason, ok=False)
+                        return tc["id"], reason
                     try:
                         out = str(fn(**args))                            # 出口5（成功）——拆成两行才有地方记日志
                     except TypeError as e:
@@ -570,6 +617,7 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=
                                   "没执行成功的工具请如实说明，不要假装成功。"}],
                     on_text=on_text, tool_choice="none")
             full_reply = result["content"] or "抱歉，我这边没组织好回答，你换个说法再问我一次？"
+            usage_used = result.get("usage") if isinstance(result, dict) else None
             del messages[base:]
             if print_stream:
                 print("AI:", full_reply)
@@ -581,10 +629,14 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=
     full_reply = clean_aside(full_reply)
     # 安全兜底：如果回复里出现人设/系统提示原文，替换成拒绝话术
     full_reply = guard_output(full_reply)
+    try:
+        log_model_usage(model_used, user_input, full_reply, usage_used)
+    except Exception:
+        pass
         # 删掉旁白后可能留下行首行尾多余空格和空行
     full_reply = "\n".join(line.strip() for line in full_reply.split("\n") if line.strip())
-    # Reflexion 自我反思：这轮动过工具/是计算规划题 → 答完自检一遍，发现问题就带反馈重写一次
-    if not failed and (turn_tools or COT_HINT.search(user_input) or PLAN_HINT.search(user_input)):
+    # Reflexion 自我反思：只在"没调工具、但像计算/规划题"时自检，避免工具轮被反思话术污染
+    if not failed and not turn_tools and (COT_HINT.search(user_input) or PLAN_HINT.search(user_input)):
         _critique = reflect_on_reply(user_input, full_reply)
         if _critique:
             messages.append({"role": "assistant", "content": full_reply})
