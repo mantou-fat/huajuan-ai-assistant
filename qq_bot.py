@@ -24,6 +24,7 @@ import time
 import hashlib
 import asyncio
 import threading
+import random
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE)
@@ -52,12 +53,14 @@ MAX_CHUNK = 1500
 _seen = {}
 _seen_lock = threading.Lock()
 
-# 主动消息：QQ_PROACTIVE=1 开启；QQ_OWNER_UID 填接收人 QQ；静默超过 N 小时发一条
+# 主动消息：QQ_PROACTIVE=1 开启；QQ_OWNER_UID 填接收人 QQ
+# 间隔随机（MIN~MAX 小时），夜间不发，用户回话后顺延
 QQ_PROACTIVE = os.getenv("QQ_PROACTIVE", "0")
 QQ_OWNER_UID = os.getenv("QQ_OWNER_UID", "")
-QQ_PROACTIVE_HOURS = float(os.getenv("QQ_PROACTIVE_HOURS", "6"))
+QQ_PROACTIVE_MIN = float(os.getenv("QQ_PROACTIVE_MIN_HOURS", "2"))
+QQ_PROACTIVE_MAX = float(os.getenv("QQ_PROACTIVE_MAX_HOURS", "8"))
 _last_activity = time.time()
-_last_proactive = 0.0
+_next_proactive_at = 0.0
 
 
 def dedupe(message_id):
@@ -248,28 +251,41 @@ def handle_message(data):
     print("[qq] 已回复 ->", "群" + str(gid) if mtype == "group" else "私聊" + str(uid), flush=True)
 
 
+def _next_gap():
+    """随机间隔：MIN~MAX 小时之间"""
+    lo, hi = sorted((QQ_PROACTIVE_MIN, QQ_PROACTIVE_MAX))
+    return random.uniform(max(0.17, lo), max(lo, hi)) * 3600
+
+
 def proactive_loop():
-    """静默太久就主动发一条（默认关闭，QQ_PROACTIVE=1 开启）"""
-    global _last_proactive
+    """随机间隔主动发消息（默认关闭，QQ_PROACTIVE=1 开启）"""
+    global _next_proactive_at
+    _next_proactive_at = time.time() + _next_gap()
     while True:
-        time.sleep(300)
+        time.sleep(random.uniform(60, 240))   # 检查也要随机，别像闹钟
         if QQ_PROACTIVE != "1" or not QQ_OWNER_UID:
             continue
-        idle = time.time() - _last_activity
-        if idle < QQ_PROACTIVE_HOURS * 3600:
+        now = time.time()
+        if now < _next_proactive_at:
             continue
-        if time.time() - _last_proactive < QQ_PROACTIVE_HOURS * 3600:
+        hour = time.localtime().tm_hour
+        if hour >= 23 or hour < 8:            # 夜里不发，像个正常人
+            _next_proactive_at = now + random.uniform(0.5, 1.5) * 3600
+            continue
+        if now - _last_activity < min(QQ_PROACTIVE_MIN, QQ_PROACTIVE_MAX) * 3600:
+            _next_proactive_at = now + _next_gap()   # 用户刚说过话，顺延
             continue
         try:
             set_sid(sid_for("p", QQ_OWNER_UID))
             msg = bot.get_greeting()
             if not msg:
-                msg = "在忙吗？我在这儿呢。"
+                msg = random.choice(["在忙吗？我在这儿呢。", "突然想到你，过来看看。", "在干嘛呢？"])
             send_private(int(QQ_OWNER_UID), msg)
-            _last_proactive = time.time()
             print("[qq] 主动消息 ->", QQ_OWNER_UID, msg[:40], flush=True)
         except Exception as e:  # noqa: BLE001
             print("[qq] 主动消息失败:", e, flush=True)
+        finally:
+            _next_proactive_at = time.time() + _next_gap()
 
 
 async def main():

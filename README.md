@@ -205,6 +205,8 @@ python qq_bot.py
 
 **语音回复**：对花卷说"**发语音**""说给我听"，它会用 qwen3-tts 合成语音，以 QQ 语音条回复（`QQ_VOICE=always` 可让每条都发语音，`off` 关闭；音色用 `QQ_VOICE_NAME` 配，默认 Cherry）。
 
+**主动消息**：`QQ_PROACTIVE=1` + `QQ_OWNER_UID=你的QQ` 开启；间隔在 `QQ_PROACTIVE_MIN_HOURS`~`QQ_PROACTIVE_MAX_HOURS` 之间**随机**，夜间（23:00-08:00）不发，你回话后自动顺延——像真人，不像闹钟。
+
 > 依赖：`websockets`（`pip install -r requirements_qq.txt`）。
 
 ## 质量保障：全链路评测（evals/）
