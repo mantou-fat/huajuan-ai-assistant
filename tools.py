@@ -448,6 +448,38 @@ def _zh_weather(desc):
     return desc
 
 
+_WMO_ZH = {
+    0: "晴", 1: "大部晴", 2: "多云", 3: "阴", 45: "雾", 48: "雾凇",
+    51: "毛毛雨", 53: "毛毛雨", 55: "毛毛雨", 61: "小雨", 63: "中雨", 65: "大雨",
+    71: "小雪", 73: "中雪", 75: "大雪", 80: "阵雨", 81: "阵雨", 82: "强阵雨",
+    95: "雷阵雨", 96: "雷暴冰雹", 99: "雷暴冰雹",
+}
+
+
+def _weather_openmeteo(query):
+    """备用数据源：open-meteo（无需 key，稳定）"""
+    if "," in query and all(p.strip().replace(".", "", 1).replace("-", "", 1).isdigit() for p in query.split(",")):
+        lat, lon = [p.strip() for p in query.split(",")]
+        name = query
+    else:
+        g = requests.get("https://geocoding-api.open-meteo.com/v1/search",
+                         params={"name": query, "count": 1, "language": "zh", "format": "json"},
+                         timeout=6).json()
+        res = g.get("results") or []
+        if not res:
+            raise ValueError("城市没找到")
+        lat, lon = res[0]["latitude"], res[0]["longitude"]
+        name = res[0].get("name") or query
+    w = requests.get("https://api.open-meteo.com/v1/forecast",
+                     params={"latitude": lat, "longitude": lon,
+                             "current": "temperature_2m,relative_humidity_2m,apparent_temperature,weather_code",
+                             "timezone": "auto"}, timeout=6).json()
+    cur = w["current"]
+    return ("查询地(%s)现在%s，气温%s℃，体感%s℃，湿度%s%%" % (
+        name, _WMO_ZH.get(cur.get("weather_code"), "未知"),
+        cur.get("temperature_2m"), cur.get("apparent_temperature"), cur.get("relative_humidity_2m")))
+
+
 def get_weather(city=""):
     """city 可省略：优先浏览器定位 → 默认城市(DEFAULT_CITY) → IP 定位；都没有才反问"""
     try:
@@ -463,12 +495,23 @@ def get_weather(city=""):
                 query = detected
             else:
                 return "没拿到城市，也没定位信息，问一下用户想查哪里"
-        r = requests.get("https://wttr.in/" + query, params={"format": "j1", "lang": "zh"}, timeout=8)
-        cur = r.json()["current_condition"][0]
-        cond = _zh_weather(cur["lang_zh"][0]["value"])
-        return f"查询地({query})现在{cond}，气温{cur['temp_C']}℃，体感{cur['FeelsLikeC']}℃，湿度{cur['humidity']}%"
     except Exception as e:
         return f"查天气失败了：{e}"
+    # 主数据源 wttr.in：失败重试一次，再失败换 open-meteo
+    last = None
+    for _ in range(2):
+        try:
+            r = requests.get("https://wttr.in/" + query, params={"format": "j1", "lang": "zh"}, timeout=10)
+            cur = r.json()["current_condition"][0]
+            cond = _zh_weather(cur["lang_zh"][0]["value"])
+            return f"查询地({query})现在{cond}，气温{cur['temp_C']}℃，体感{cur['FeelsLikeC']}℃，湿度{cur['humidity']}%"
+        except Exception as e:
+            last = e
+            time.sleep(0.4)
+    try:
+        return _weather_openmeteo(query)
+    except Exception as e2:
+        return f"查天气失败了：{last or e2}"
 def load_reminders():
     try:
         with open(REMINDER_FILE, "r", encoding="utf-8") as f:

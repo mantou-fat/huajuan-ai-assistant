@@ -273,9 +273,7 @@ def handle_message(data):
                     send_voice_group(gid, spath)
                 else:
                     send_voice_private(uid, spath)
-                caption = reply.replace(song.group(1), "").strip()
-                caption = "\n".join(l for l in caption.split("\n") if l.strip())
-                send_private(uid, caption[:800]) if mtype != "group" else send_group(gid, caption[:800])
+                send_private(uid, "唱好啦，听听～") if mtype != "group" else send_group(gid, "唱好啦，听听～")
                 print("[qq] 已发歌 ->", spath, flush=True)
                 return
             except Exception as e:  # noqa: BLE001
