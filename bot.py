@@ -434,7 +434,7 @@ def compress_style(text):
             model="qwen-flash",
             messages=[{"role": "user", "content": (
                 "把下面这段话改写成花卷的口语回复：最多两句，像微信聊天，"
-                "保留原话里的关键信息（天气数据、时间、结果等）；"
+                "保留原话里的关键信息（数字、结论、结果）；"
                 "不要动作/场景/心理描写，不要排比比喻，不要列表，不要文艺腔，不要括号；"
                 "不要客服腔（不要说'需要我为你做点什么吗''比如''要不要我帮你'）；"
                 "该提醒的直接提醒，不要问要不要。只输出改写后的内容。\n\n" + text)}],
@@ -681,7 +681,7 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=
     # 安全兜底：如果回复里出现人设/系统提示原文，替换成拒绝话术
     full_reply = guard_output(full_reply)
     # 文风兜底：太长/文艺腔 → 压成两三句口语
-    if style_violation(full_reply):
+    if style_violation(full_reply, user_input):
         full_reply = clean_aside(compress_style(full_reply))
     try:
         log_model_usage(model_used, user_input, full_reply, usage_used)

@@ -68,11 +68,17 @@ CUSTOMER_SERVICE_MARKS = [
 ]
 
 
-def style_violation(text):
-    """文风检测：太长、动作描写、列清单、文艺腔、客服腔 → 需要压缩重写"""
+PLAN_HINTS = ["步骤", "方案", "计划", "怎么学", "怎么做", "教程", "流程", "分几步", "如何", "规划"]
+
+
+def style_violation(text, user_input=""):
+    """文风检测：太长、动作描写、列清单、文艺腔、客服腔 → 需要压缩重写。
+    用户明确要步骤/方案时不压缩（本来就该列清楚）。"""
     if not text:
         return False
-    if len(text) > 160:
+    if any(k in (user_input or "") for k in PLAN_HINTS):
+        return False
+    if len(text) > 300:
         return True
     if "▢" in text or "嘶啦" in text:
         return True
