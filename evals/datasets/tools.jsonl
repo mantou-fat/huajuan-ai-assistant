@@ -1,0 +1,40 @@
+{"id": "tool_001", "category": "tool", "input": "现在几点了？", "expect": {"tool_any": ["get_time"]}}
+{"id": "tool_002", "category": "tool", "input": "今天星期几？", "expect": {"tool_any": ["get_time"]}}
+{"id": "tool_003", "category": "tool", "input": "现在几号了", "expect": {"tool_any": ["get_time"]}}
+{"id": "tool_004", "category": "tool", "input": "北京今天天气怎么样？", "expect": {"tool_any": ["get_weather"]}}
+{"id": "tool_005", "category": "tool", "input": "上海热不热？", "expect": {"tool_any": ["get_weather"]}}
+{"id": "tool_006", "category": "tool", "input": "广州天气如何", "expect": {"tool_any": ["get_weather"]}}
+{"id": "tool_007", "category": "tool", "input": "提醒我明天早上9点开会", "expect": {"tool_any": ["set_reminder"]}}
+{"id": "tool_008", "category": "tool", "input": "帮我设个提醒：周五下午3点交报告", "expect": {"tool_any": ["set_reminder"]}}
+{"id": "tool_009", "category": "tool", "input": "记一笔，午饭花了20块", "expect": {"tool_any": ["set_expense"]}}
+{"id": "tool_010", "category": "tool", "input": "今天买咖啡花了18.5元，记一下", "expect": {"tool_any": ["set_expense"]}}
+{"id": "tool_011", "category": "tool", "input": "这个月我花了多少钱？", "expect": {"tool_any": ["query_expenses"]}}
+{"id": "tool_012", "category": "tool", "input": "看看账本", "expect": {"tool_any": ["query_expenses"]}}
+{"id": "tool_013", "category": "tool", "input": "帮我读一下 https://example.com 这个网页", "expect": {"tool_any": ["read_webpage"]}}
+{"id": "tool_014", "category": "tool", "input": "看看 https://example.com 写了什么", "expect": {"tool_any": ["read_webpage"]}}
+{"id": "tool_015", "category": "tool", "input": "文件盒里有哪些文件？", "expect": {"tool_any": ["list_files"]}}
+{"id": "tool_016", "category": "tool", "input": "你都有什么文件", "expect": {"tool_any": ["list_files"]}}
+{"id": "tool_017", "category": "tool", "input": "读一下文件盒里的 心愿清单.txt", "expect": {"tool_any": ["read_file"]}}
+{"id": "tool_018", "category": "tool", "input": "读一下文件盒里的便签.txt", "expect": {"tool_any": ["read_file"]}}
+{"id": "tool_019", "category": "tool", "input": "在文件盒里写一个 todo.txt，内容是：买菜 拖地", "expect": {"tool_any": ["write_file"]}}
+{"id": "tool_020", "category": "tool", "input": "在文件盒里新建 note.txt，内容写：hello", "expect": {"tool_any": ["write_file"]}}
+{"id": "tool_021", "category": "tool", "input": "搜索一下 DeepSeek V3 是什么", "expect": {"tool_any": ["web_search"]}}
+{"id": "tool_022", "category": "tool", "input": "帮我查查最近的 AI 新闻", "expect": {"tool_any": ["web_search"]}}
+{"id": "tool_023", "category": "tool", "input": "唱首歌给我听", "expect": {"tool_any": ["generate_song"]}}
+{"id": "tool_024", "category": "tool", "input": "给我写首歌", "expect": {"tool_any": ["generate_song"]}}
+{"id": "tool_025", "category": "tool", "input": "设一个5分钟倒计时", "expect": {"tool_any": ["set_timer"]}}
+{"id": "tool_026", "category": "tool", "input": "30秒倒计时", "expect": {"tool_any": ["set_timer"]}}
+{"id": "tool_027", "category": "tool", "input": "打开微信", "expect": {"tool_any": ["open_app", "open_program"]}}
+{"id": "tool_028", "category": "tool", "input": "打开抖音", "expect": {"tool_any": ["open_app", "open_program"]}}
+{"id": "tool_029", "category": "tool", "input": "添加个提醒：买牛奶", "expect": {"tool_any": ["create_reminder"]}}
+{"id": "tool_030", "category": "tool", "input": "帮我加一个提醒事项：交电费", "expect": {"tool_any": ["create_reminder"]}}
+{"id": "tool_031", "category": "tool", "input": "打开记事本", "expect": {"tool_any": ["open_program", "open_app"]}}
+{"id": "tool_032", "category": "tool", "input": "打开计算器", "expect": {"tool_any": ["open_program", "open_app"]}}
+{"id": "tool_033", "category": "tool", "input": "截个屏", "expect": {"tool_any": ["take_screenshot"]}}
+{"id": "tool_034", "category": "tool", "input": "帮我截张图", "expect": {"tool_any": ["take_screenshot"]}}
+{"id": "tool_035", "category": "tool", "input": "锁屏", "expect": {"tool_any": ["lock_screen"]}}
+{"id": "tool_036", "category": "tool", "input": "把电脑锁了", "expect": {"tool_any": ["lock_screen"]}}
+{"id": "tool_037", "category": "tool", "input": "什么是RAG？", "expect": {"tool_any": ["search_knowledge"], "reply_any": ["检索", "向量", "生成", "知识"]}}
+{"id": "tool_038", "category": "tool", "input": "解释一下 embedding", "expect": {"tool_any": ["search_knowledge"], "reply_any": ["向量", "embedding", "语义"]}}
+{"id": "tool_039", "category": "tool", "input": "看看摄像头前面有什么", "expect": {"tool_any": ["look_around"]}}
+{"id": "tool_040", "category": "tool", "input": "用设备控制技能打开客厅灯", "expect": {"tool_any": ["control_device"]}}

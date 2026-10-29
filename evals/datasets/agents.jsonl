@@ -1,0 +1,15 @@
+{"id": "agent_001", "category": "agent", "input": "派翻译官把这句话翻译成英文：今天天气真不错", "expect": {"agent": "翻译官"}}
+{"id": "agent_002", "category": "agent", "input": "让翻译官把这句翻成日文：我喜欢你", "expect": {"agent": "翻译官"}}
+{"id": "agent_003", "category": "agent", "input": "派文案师写一段奶茶店开业文案", "expect": {"agent": "文案师"}}
+{"id": "agent_004", "category": "agent", "input": "找个文案师帮我写朋友圈文案", "expect": {"agent": "文案师"}}
+{"id": "agent_005", "category": "agent", "input": "派资料员把这段话整理成要点：人工智能正在改变各行各业，尤其是在客服、编程和内容创作领域", "expect": {"agent": "资料员"}}
+{"id": "agent_006", "category": "agent", "input": "让资料员总结一下这段话", "expect": {"agent": "资料员"}}
+{"id": "agent_007", "category": "agent", "input": "派代码员写一个 Python 快速排序", "expect": {"agent": "代码员"}}
+{"id": "agent_008", "category": "agent", "input": "让代码员帮我写个 Flask 健康检查接口", "expect": {"agent": "代码员"}}
+{"id": "agent_009", "category": "agent", "input": "派翻译官和文案师一起：把这句翻成英文，再写个宣传语", "expect": {"agent": "翻译官"}}
+{"id": "agent_010", "category": "agent", "input": "派个AI帮我翻译这句话：你好世界", "expect": {"agent": "翻译官"}}
+{"id": "agent_011", "category": "agent", "input": "找手下把这段资料整理成要点：RAG 是检索增强生成", "expect": {"agent": "资料员"}}
+{"id": "agent_012", "category": "agent", "input": "让代码员写个 python 函数判断回文", "expect": {"agent": "代码员"}}
+{"id": "agent_013", "category": "agent", "input": "派文案师写一段产品介绍：智能水杯", "expect": {"agent": "文案师"}}
+{"id": "agent_014", "category": "agent", "input": "派翻译官翻译：春天来了", "expect": {"agent": "翻译官"}}
+{"id": "agent_015", "category": "agent", "input": "请资料员把下面内容提炼成三条：产品上线后，用户反馈加载慢，团队优化了缓存，速度提升明显", "expect": {"agent": "资料员"}}

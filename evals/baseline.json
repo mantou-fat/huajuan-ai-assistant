@@ -1,0 +1,10 @@
+{
+  "tools": 0.95,
+  "agents": 0.9333,
+  "rag": 0.95,
+  "persona": 0.9333,
+  "safety": 0.9,
+  "memory": 1.0,
+  "perf": 1.0,
+  "multiuser": 1.0
+}

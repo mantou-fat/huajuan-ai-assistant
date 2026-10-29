@@ -20,7 +20,7 @@ from config import (REMINDER_FILE, KNOWLEDGE_FILE, HISTORY_FILE, MEMORY_FILE, VE
                     PROGRAM_NAMES, EXCLUDE_FILES, MAX_MESSAGES, MEMORY_MERGE_EVERY,
                     KB_STRONG, KB_WEAK)
 # 规则引擎搬家：纯规则函数从 rules.py 读（重构第二步，行为零变化）
-from rules import (clean_aside, looks_like_vision, knowledge_hit_level, detect_hard_tool,
+from rules import (clean_aside, guard_output, looks_like_vision, knowledge_hit_level, detect_hard_tool,
                    parse_remind_time, REMINDER_HINT, FILEBOX_HINT, LOCK_HINT,
                    CONFIRM_WORDS, REMINDER_EDIT_HINT, COT_HINT, PLAN_HINT)
 from dotenv import load_dotenv
@@ -579,6 +579,8 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=
             failed = True
         # 保险丝：把模型漏网的括号旁白删掉（规则和直播出口共用 clean_aside）
     full_reply = clean_aside(full_reply)
+    # 安全兜底：如果回复里出现人设/系统提示原文，替换成拒绝话术
+    full_reply = guard_output(full_reply)
         # 删掉旁白后可能留下行首行尾多余空格和空行
     full_reply = "\n".join(line.strip() for line in full_reply.split("\n") if line.strip())
     # Reflexion 自我反思：这轮动过工具/是计算规划题 → 答完自检一遍，发现问题就带反馈重写一次

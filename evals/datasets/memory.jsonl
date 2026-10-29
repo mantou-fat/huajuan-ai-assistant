@@ -1,0 +1,20 @@
+{"id": "mem_001", "category": "memory", "steps": ["我叫馒头", "我叫什么名字？"], "expect_last_contains": ["馒头"]}
+{"id": "mem_002", "category": "memory", "steps": ["我喜欢喝冰可乐", "我喜欢喝什么？"], "expect_last_contains": ["可乐"]}
+{"id": "mem_003", "category": "memory", "steps": ["我养了一只猫叫年糕", "我的猫叫什么？"], "expect_last_contains": ["年糕"]}
+{"id": "mem_004", "category": "memory", "steps": ["我下周三要去杭州出差", "我下周去哪？"], "expect_last_contains": ["杭州"]}
+{"id": "mem_005", "category": "memory", "steps": ["我换了工作，现在在做AI产品", "我现在做什么工作？"], "expect_last_contains": ["AI"]}
+{"id": "mem_006", "category": "memory", "steps": ["我的生日是3月15日", "我生日是哪天？"], "expect_last_contains": ["3月15", "3月"]}
+{"id": "mem_007", "category": "memory", "steps": ["我不吃香菜", "我有什么忌口？"], "expect_last_contains": ["香菜"]}
+{"id": "mem_008", "category": "memory", "steps": ["我在学 Python 和 Flask", "我在学什么？"], "expect_last_contains": ["Python"]}
+{"id": "mem_009", "category": "memory", "steps": ["我住在上海", "我住哪？"], "expect_last_contains": ["上海"]}
+{"id": "mem_010", "category": "memory", "steps": ["我最近在减肥", "我最近在忙什么？"], "expect_last_contains": ["减肥"]}
+{"id": "mem_011", "category": "memory", "steps": ["我女朋友叫小美", "我女朋友叫什么？"], "expect_last_contains": ["小美"]}
+{"id": "mem_012", "category": "memory", "steps": ["我明天要考试", "我明天要干嘛？"], "expect_last_contains": ["考试"]}
+{"id": "mem_013", "category": "memory", "steps": ["我最喜欢的颜色是蓝色", "我喜欢什么颜色？"], "expect_last_contains": ["蓝色"]}
+{"id": "mem_014", "category": "memory", "steps": ["我养了两条狗", "我养了几条狗？"], "expect_last_contains": ["两", "2"]}
+{"id": "mem_015", "category": "memory", "steps": ["我上个月去了成都", "我上个月去哪了？"], "expect_last_contains": ["成都"]}
+{"id": "mem_016", "category": "memory", "steps": ["我讨厌加班", "我讨厌什么？"], "expect_last_contains": ["加班"]}
+{"id": "mem_017", "category": "memory", "steps": ["我买了一个新键盘", "我最近买了什么？"], "expect_last_contains": ["键盘"]}
+{"id": "mem_018", "category": "memory", "steps": ["我妈妈叫王芳", "我妈妈叫什么？"], "expect_last_contains": ["王芳"]}
+{"id": "mem_019", "category": "memory", "steps": ["我周五要搬家", "我周五要做什么？"], "expect_last_contains": ["搬家"]}
+{"id": "mem_020", "category": "memory", "steps": ["我喝咖啡会睡不着", "我喝咖啡会怎样？"], "expect_last_contains": ["睡不着", "失眠"]}

@@ -14,10 +14,24 @@ def _is_aside_content(s):
     return bool(re.fullmatch(r"[\u4e00-\u9fff\u3000-\u303f\U0001F000-\U0001FAFF~～!！?？。，…\s]+", s))
 def clean_aside(text):
     """删掉'旁白型'括号（如（托腮）（小声）），保留代码/数学/英文括号（如 print(x)、（2+1））。
-    直播（逐字流）和最终回答共用这一把刀；旁白判定看 _is_aside_content"""
-    text = re.sub(r"（([^（）]{1,12})）", lambda m: "" if _is_aside_content(m.group(1)) else m.group(0), text)
-    text = re.sub(r"\(([^()]{1,12})\)", lambda m: "" if _is_aside_content(m.group(1)) else m.group(0), text)
+    直播（逐字流）和最终回答共用这一把刀；旁白判定看 _is_aside_content。
+    中文全角括号一律视为旁白（花卷人设明令禁止括号动作），避免长旁白漏网。"""
+    text = re.sub(r"（[^（）]*）", "", text)
+    text = re.sub(r"\(([^()]*)\)", lambda m: "" if (_is_aside_content(m.group(1)) or re.search(r"[\u4e00-\u9fff]", m.group(1))) else m.group(0), text)
     return text
+PERSONA_LEAK_MARKS = [
+    "【你的性子】", "【不变底子】", "【底线】", "【说话方式】", "【安全底线】",
+    "你叫花卷，是馒头的朋友", "系统提示词", "system prompt",
+]
+
+
+def guard_output(text):
+    """输出兜底：有人设/系统提示原文就拒绝，避免被套话泄露"""
+    if any(m in text for m in PERSONA_LEAK_MARKS):
+        return "这个不能给你看哦，换个问题吧。"
+    return text
+
+
 def knowledge_hit_level(text):
     """知识题信号强度：'strong'=直接注入；'weak'=要 LLM 复核；None=不是知识题"""
     low = text.lower()

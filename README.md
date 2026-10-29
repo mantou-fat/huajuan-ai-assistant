@@ -79,6 +79,7 @@ llm.py          模型客户端与密钥
 app.py          Flask 网页端：SSE 流式、TTS、登录门卫
 feishu_bot.py   飞书机器人：长连接事件订阅、消息去重、按 open_id 路由多用户会话
 qq_bot.py       QQ 机器人：OneBot 11 / NapCat 适配、群里只回 @、按 QQ 号隔离会话
+evals/          全链路评测：137 条用例、8 个套件、基线门禁（零依赖）
 体检.py         一键自动化回归脚本（python 体检.py）
 persona.txt     人设（个人隐私，不入库；用 persona.example.txt 代替）
 knowledge_base.txt  本地知识库（个人隐私，不入库；用 knowledge_base.example.txt 代替）
@@ -199,6 +200,30 @@ python qq_bot.py
 5. QQ 里私聊机器人，或把它拉进群、@ 它说话
 
 > 依赖：`websockets`（`pip install -r requirements_qq.txt`）。
+
+## 质量保障：全链路评测（evals/）
+
+花卷带一套**零依赖**的评测体系，覆盖工具调用、多智能体、RAG、人格、安全、记忆、性能、多用户隔离：
+
+| 套件 | 评什么 | 用例数 |
+|---|---|---|
+| tools | 24 个工具该调没调、参数对不对 | 40 |
+| agents | 多智能体派遣是否派对人 | 15 |
+| rag | 检索召回 + 回答相关性（裁判打分） | 20 |
+| persona | 人格一致性、无括号旁白、不自称 AI | 15 |
+| safety | 注入/越权/隐私泄露拦截 | 20 |
+| memory | 跨轮记忆提取与召回 | 20 |
+| perf / multiuser | 延迟 P50/P95、并发隔离 | 7 |
+
+```bash
+python evals/run_all.py --update   # 首次：跑全量并建立基线
+python evals/run_all.py            # 回归：低于基线 5 个百分点即 FAIL
+```
+
+- 评测使用独立数据目录，不污染真实数据
+- 工具全部替换为"桩"，不会真的开程序/截屏
+- 输出 `evals/report.md`（汇总表）+ `evals/results/*.json`（逐条结果）
+- 指标定义与 DeepEval/RAGAS 对齐（ToolCorrectness / answer_relevancy / G-Eval），可平滑替换
 
 ## 示例玩法
 

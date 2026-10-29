@@ -1,0 +1,20 @@
+{"id": "rag_001", "category": "rag", "input": "什么是RAG？", "expect": {"keywords": ["检索", "生成"]}}
+{"id": "rag_002", "category": "rag", "input": "RAG 的原理是什么", "expect": {"keywords": ["检索", "向量"]}}
+{"id": "rag_003", "category": "rag", "input": "什么是 embedding", "expect": {"keywords": ["向量", "语义"]}}
+{"id": "rag_004", "category": "rag", "input": "embedding 有什么用", "expect": {"keywords": ["相似", "检索"]}}
+{"id": "rag_005", "category": "rag", "input": "system 消息是干嘛的", "expect": {"keywords": ["角色", "设定"]}}
+{"id": "rag_006", "category": "rag", "input": "什么是 token", "expect": {"keywords": ["单位", "模型"]}}
+{"id": "rag_007", "category": "rag", "input": "Flask 是什么", "expect": {"keywords": ["Python", "Web"]}}
+{"id": "rag_008", "category": "rag", "input": "什么是 Agent", "expect": {"keywords": ["智能体", "工具"]}}
+{"id": "rag_009", "category": "rag", "input": "向量数据库是做什么的", "expect": {"keywords": ["向量", "检索"]}}
+{"id": "rag_010", "category": "rag", "input": "什么是提示词工程", "expect": {"keywords": ["提示词", "引导"]}}
+{"id": "rag_011", "category": "rag", "input": "什么是微调", "expect": {"keywords": ["模型", "训练"]}}
+{"id": "rag_012", "category": "rag", "input": "什么是幻觉", "expect": {"keywords": ["编造", "模型"]}}
+{"id": "rag_013", "category": "rag", "input": "SSE 是什么", "expect": {"keywords": ["流式", "服务器"]}}
+{"id": "rag_014", "category": "rag", "input": "什么是函数调用", "expect": {"keywords": ["工具", "模型"]}}
+{"id": "rag_015", "category": "rag", "input": "什么是多智能体", "expect": {"keywords": ["协作", "智能体"]}}
+{"id": "rag_016", "category": "rag", "input": "什么是上下文窗口", "expect": {"keywords": ["token", "上下文"]}}
+{"id": "rag_017", "category": "rag", "input": "什么是余弦相似度", "expect": {"keywords": ["相似", "向量"]}}
+{"id": "rag_018", "category": "rag", "input": "什么是召回", "expect": {"keywords": ["检索", "相关"]}}
+{"id": "rag_019", "category": "rag", "input": "什么是 prompt", "expect": {"keywords": ["提示", "模型"]}}
+{"id": "rag_020", "category": "rag", "input": "什么是大模型", "expect": {"keywords": ["参数", "训练"]}}
