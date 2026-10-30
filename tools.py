@@ -17,12 +17,12 @@ from rag import search_knowledge, get_embedding, cosine_similarity
 
 def load_expenses():
     try:
-        with open(EXPENSE_FILE, "r", encoding="utf-8") as f:
+        with open(current().file("expense"), "r", encoding="utf-8") as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return []
 def save_expenses(items):
-    with open(EXPENSE_FILE, "w", encoding="utf-8") as f:
+    with open(current().file("expense"), "w", encoding="utf-8") as f:
         json.dump(items, f, ensure_ascii=False, indent=2)
 def query_expenses(month=None):
     items = load_expenses()
@@ -514,12 +514,12 @@ def get_weather(city=""):
         return f"查天气失败了：{last or e2}"
 def load_reminders():
     try:
-        with open(REMINDER_FILE, "r", encoding="utf-8") as f:
+        with open(current().file("reminder"), "r", encoding="utf-8") as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return []
 def save_reminders(items):
-    with open(REMINDER_FILE, "w", encoding="utf-8") as f:
+    with open(current().file("reminder"), "w", encoding="utf-8") as f:
         json.dump(items, f, ensure_ascii=False, indent=2)
 def read_webpage(url):
     try:
@@ -1005,7 +1005,7 @@ def control_device(device, action):
     # 防护：设备名必须是非空字符串，否则空串会命中"第一台设备"（"" 在任意名字里都成立）
     if not isinstance(device, str) or not device.strip():
         return "请说清楚要控制哪个设备，比如：客厅灯、卧室灯、空调"
-    with open(HOME_FILE, "r", encoding="utf-8") as f:
+    with open(current().file("home"), "r", encoding="utf-8") as f:
         home = json.load(f)
     dev = None
     for d in home.values():
@@ -1022,7 +1022,7 @@ def control_device(device, action):
         return f"{dev['name']}现在是{'开' if dev['on'] else '关'}的"
     else:
         return "动作只能是：开、关、查询"
-    with open(HOME_FILE, "w", encoding="utf-8") as f:
+    with open(current().file("home"), "w", encoding="utf-8") as f:
         json.dump(home, f, ensure_ascii=False, indent=2)
     return f"{dev['name']}已{'打开' if dev['on'] else '关闭'}"
 TOOL_FUNCS = {

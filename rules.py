@@ -95,6 +95,25 @@ def style_violation(text, user_input=""):
     return False
 
 
+CLAIM_RULES = [
+    (("已设提醒", "提醒设好", "已记住", "设好了提醒"), {"set_reminder", "create_reminder"}),
+    (("已记账", "记好了", "已记下"), {"set_expense"}),
+    (("已截屏", "截图已", "截好了"), {"take_screenshot"}),
+    (("已锁屏", "锁好了"), {"lock_screen"}),
+    (("已打开", "打开了"), {"open_program", "open_app"}),
+    (("已生成", "生成好了", "已保存"), {"make_pdf", "make_ppt", "make_docx", "generate_song"}),
+]
+
+
+def claim_mismatch(reply, tools_called):
+    """回复里声称做了某动作，但这轮根本没调对应工具 → 说明在编"""
+    called = set(tools_called or [])
+    for words, tools in CLAIM_RULES:
+        if any(w in reply for w in words) and not (called & tools):
+            return True
+    return False
+
+
 def knowledge_hit_level(text):
     """知识题信号强度：'strong'=直接注入；'weak'=要 LLM 复核；None=不是知识题"""
     low = text.lower()
@@ -204,10 +223,31 @@ CONFIRM_WORDS = re.compile(r"^(确认|确定|是的?|对|好|嗯|行|锁吧|锁)
 # 修改提醒的触发词（改成/改到/换成/提前/推迟…）
 REMINDER_EDIT_HINT = re.compile(r"提醒|闹钟|那条")
 # 登记过的程序/网站名，按名字长度从长到短排，先匹配长名防止歧义
+_CN_DIGIT = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7,
+             "八": 8, "九": 9, "十": 10}
+
+
+def _cn_to_int(s):
+    """把 一~十二 这类中文数字转成 int"""
+    if not s:
+        return None
+    if s == "十":
+        return 10
+    if s.startswith("十"):
+        return 10 + _CN_DIGIT.get(s[1:], 0)
+    if "十" in s:
+        a, b = s.split("十", 1)
+        return _CN_DIGIT.get(a, 0) * 10 + (_CN_DIGIT.get(b, 0) if b else 0)
+    return _CN_DIGIT.get(s)
+
+
 def parse_remind_time(text):
-    """把'明天下午3点/后天上午9点半/晚上7点半'这类时间换算成 YYYY-MM-DD HH:MM（纯本地计算）。
+    """把'明天下午3点/后天上午9点半/晚上7点半/下午五点'这类时间换算成 YYYY-MM-DD HH:MM（纯本地计算）。
     没写哪天默认今天；但若算出来已过期（如晚上10点说'7点半'）说明有歧义 → 返回 None 让模型去问。"""
     from datetime import datetime, timedelta
+    # 中文数字转阿拉伯数字（下午五点 → 下午5点）
+    text = re.sub(r"([一二两三四五六七八九十]{1,3})(?=[点时])",
+                  lambda m: str(_cn_to_int(m.group(1)) or m.group(1)), text)
     m = re.search(r"(?:(今天|明天|后天)\s*)?(凌晨|早上|上午|中午|下午|晚上)?\s*(\d{1,2})[点时](?:(\d{1,2})\s*分?)?", text)
     if not m:
         return None

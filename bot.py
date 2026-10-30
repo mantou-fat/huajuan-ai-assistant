@@ -21,6 +21,7 @@ from config import (REMINDER_FILE, KNOWLEDGE_FILE, HISTORY_FILE, MEMORY_FILE, VE
                     KB_STRONG, KB_WEAK)
 # 规则引擎搬家：纯规则函数从 rules.py 读（重构第二步，行为零变化）
 from rules import (clean_aside, guard_output, dangerous_block_reason, has_injection, style_violation,
+                   claim_mismatch,
                    looks_like_vision, knowledge_hit_level, detect_hard_tool,
                    parse_remind_time, REMINDER_HINT, FILEBOX_HINT, LOCK_HINT,
                    CONFIRM_WORDS, REMINDER_EDIT_HINT, COT_HINT, PLAN_HINT)
@@ -667,7 +668,17 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=
                                   "刚才已执行的工具结果都在上面的 tool 消息里，请直接据此给用户最终答复；"
                                   "没执行成功的工具请如实说明，不要假装成功。"}],
                     on_text=on_text, tool_choice="none")
-            full_reply = result["content"] or "抱歉，我这边没组织好回答，你换个说法再问我一次？"
+            if not (result.get("content") or "").strip():
+                # 空回复兜底：再要一次最终答复（不再调工具）
+                try:
+                    r2 = create_stream(
+                        messages + [{"role": "system", "content": "【系统】请直接给用户最终答复，不要再调用工具；工具没成功就如实说明。"}],
+                        tool_choice="none")
+                    if (r2.get("content") or "").strip():
+                        result = r2
+                except Exception:
+                    pass
+            full_reply = result["content"] or "我这边刚才没答上来，你再问一次？"
             usage_used = result.get("usage") if isinstance(result, dict) else None
             del messages[base:]
             if print_stream:
@@ -683,6 +694,12 @@ def get_reply(user_input, print_stream=False, on_text=None, on_tool=None, image=
     # 文风兜底：太长/文艺腔 → 压成两三句口语
     if style_violation(full_reply, user_input):
         full_reply = clean_aside(compress_style(full_reply))
+    # 事实兜底：声称做了动作但没调工具 → 补一句实话，别让用户以为已完成
+    try:
+        if claim_mismatch(full_reply, turn_tools):
+            full_reply = full_reply.rstrip() + " 刚才说的动作我还没真做，要我现在做吗？"
+    except Exception:
+        pass
     try:
         log_model_usage(model_used, user_input, full_reply, usage_used)
     except Exception:
