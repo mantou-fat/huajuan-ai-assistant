@@ -114,6 +114,9 @@ def claim_mismatch(reply, tools_called):
     return False
 
 
+WEB_SEARCH_HINT = re.compile(r"(搜索一下|搜一下|搜一搜|帮我搜|上网查|百度一下|谷歌一下|查一下最新|最新消息|最新新闻|搜搜)")
+
+
 def knowledge_hit_level(text):
     """知识题信号强度：'strong'=直接注入；'weak'=要 LLM 复核；None=不是知识题"""
     low = text.lower()
