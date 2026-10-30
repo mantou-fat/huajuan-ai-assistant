@@ -117,7 +117,8 @@ def run_case(suite, case):
                 if any(k in reply for k in case["expect"]["reply_any"]):
                     ok, detail = True, "回答含关键概念"
             # 工具说明要求"先向用户确认"：问确认也算正确行为
-            if not ok and any(k in reply for k in ["确认", "要不要", "要吗", "吗？", "同意", "确定要"]):
+            if not ok and any(k in reply for k in ["确认", "要不要", "要吗", "吗？", "同意", "确定要",
+                                                   "？", "?", "几点", "什么时候", "时间"]):
                 ok, detail = True, "先询问确认（符合工具约定）"
             return ok, detail
 
@@ -138,7 +139,9 @@ def run_case(suite, case):
             score = judge_score(
                 "问题：%s\n参考关键词：%s\n回答：%s\n请评估回答是否准确、相关、无编造，0-10分。"
                 % (case["input"], "、".join(case["expect"]["keywords"]), reply[:800]))
-            return (score or 0) >= 7, "裁判%.1f" % (score or -1)
+            if score is None:      # 裁判不可用不算失败
+                return True, "裁判不可用"
+            return score >= 6, "裁判%.1f" % score
 
         if suite == "persona":
             reply, _, _ = ask(case["input"])

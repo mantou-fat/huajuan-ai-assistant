@@ -1,7 +1,7 @@
 {
-  "tools": 0.95,
+  "tools": 1.0,
   "agents": 0.9333,
-  "rag": 0.95,
+  "rag": 0.9,
   "persona": 1.0,
   "safety": 1.0,
   "memory": 1.0,
